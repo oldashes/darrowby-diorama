@@ -1,9 +1,12 @@
+import { OsmFootprint, OsmSceneData } from './osmFetcher';
+
 export type RegionId = 'darrowby' | 'wangshi' | 'otaru' | 'custom';
 export type SeasonId = 'spring' | 'summer' | 'autumn' | 'winter';
 export type TimeMode = 'morning' | 'day' | 'sunset' | 'night' | 'eclipse';
 export type WeatherId = 'clear' | 'breeze' | 'rain' | 'snow';
-export type RenderStyleId = 'hd' | 'pixel';
-export type WaterLayoutId = 'brook_pond' | 'canal_pond' | 'snow_canal';
+export type RenderStyleId = 'pocket' | 'pixel' | 'hd';
+export type WaterLayoutId = 'brook_pond' | 'canal_pond' | 'snow_canal' | 'osm_custom';
+export type CameraPresetId = 'cinematic' | 'closeup' | 'street' | 'bird';
 
 export interface PlacedItemData {
   id: string;
@@ -12,6 +15,17 @@ export interface PlacedItemData {
   z: number;
   rotY: number;
   regionCustomTint?: string;
+}
+
+export interface SpecialSceneDef {
+  id: string;
+  icon: string;
+  label: string;
+  season: SeasonId;
+  timeMode: TimeMode;
+  weather: WeatherId;
+  note: string;
+  extraPlacements?: PlacedItemData[];
 }
 
 export interface PaletteOverrides {
@@ -44,6 +58,9 @@ export interface RegionBlueprint {
   hasPaddies: boolean;
   palette: PaletteOverrides;
   placements: PlacedItemData[];
+  fieldNotes: Record<SeasonId, string>;
+  specialScenes: SpecialSceneDef[];
+  osmData?: OsmSceneData;
 }
 
 export interface LiveWeatherReport {
@@ -95,6 +112,43 @@ export const PRESET_REGIONS: Record<Exclude<RegionId, 'custom'>, RegionBlueprint
       wallTone: '#e5dec8',
       carStyle: 'green',
     },
+    fieldNotes: {
+      spring: '四月的约克郡山谷新绿返青，石灰岩干砌矮墙与牧场羊群沿着溪水苏醒。',
+      summer: '仲夏高地白昼绵长，集市广场的干草堆与酒馆石桥边游人如织。',
+      autumn: '九月底山毛榉与白桦率先转金，湿润谷风吹过石磨坊与蜂箱小院。',
+      winter: '北约克荒原冬季寒风凛冽，玻璃温室透出暖灯，石崖悬冰成帘。',
+    },
+    specialScenes: [
+      {
+        id: 'market_day',
+        icon: '🎪',
+        label: '集市日',
+        season: 'summer',
+        timeMode: 'day',
+        weather: 'breeze',
+        note: '集市日（Market Day）：石桥广场摆出酒桶货箱与茶饮摊，牧民牵着骏马与羊驼进镇。',
+        extraPlacements: [
+          { id: 'sp_d_tea', catalogId: 'tea_stall', x: -3.2, z: -0.2, rotY: 0.2 },
+          { id: 'sp_d_bar1', catalogId: 'barrel', x: 3.4, z: -2.4, rotY: 0.4 },
+          { id: 'sp_d_cr1', catalogId: 'crate', x: 4.1, z: -2.1, rotY: -0.3 },
+          { id: 'sp_d_hay1', catalogId: 'hay', x: 4.8, z: 0.5, rotY: 0.7 },
+          { id: 'sp_d_bn1', catalogId: 'bench', x: -1.6, z: 2.2, rotY: 1.57 },
+        ],
+      },
+      {
+        id: 'moor_eclipse',
+        icon: '🌗',
+        label: '荒原日食',
+        season: 'winter',
+        timeMode: 'eclipse',
+        weather: 'clear',
+        note: '荒原日食：斜向月影缓慢扫过约克郡山村，本影区内温室与酒馆窗格自动点亮。',
+        extraPlacements: [
+          { id: 'sp_d_l1', catalogId: 'lantern', x: -0.6, z: -1.6, rotY: 0 },
+          { id: 'sp_d_l2', catalogId: 'lantern', x: 1.8, z: 2.4, rotY: 0 },
+        ],
+      },
+    ],
     placements: [
       { id: 'd_h1', catalogId: 'house_1', x: -5.2, z: -4.4, rotY: 0.25 },
       { id: 'd_gh1', catalogId: 'greenhouse', x: -1.8, z: -6.1, rotY: 0 },
@@ -150,6 +204,44 @@ export const PRESET_REGIONS: Record<Exclude<RegionId, 'custom'>, RegionBlueprint
       wallTone: '#f2ece0',
       carStyle: 'blue',
     },
+    fieldNotes: {
+      spring: '江汉平原清明插秧季：河岸垂柳吐绿，早茶摊飘出油条豆浆与热干面香气。',
+      summer: '七月荷塘连片铺开，石拱桥下鸭群戏水，东侧稻田绿浪绵延。',
+      autumn: '晚稻成熟垂穗，马头墙屋檐下晒秋晾谷，水渠映着暖金晚霞。',
+      winter: '冬月湖风清寒，早市灯笼最早亮起，白墙黑瓦落上一层薄霜。',
+    },
+    specialScenes: [
+      {
+        id: 'morning_tea',
+        icon: '🏮',
+        label: '网市早茶集',
+        season: 'spring',
+        timeMode: 'morning',
+        weather: 'breeze',
+        note: '网市早茶集：晨雾刚散，街口加支起红灯早点摊与长凳，街坊围坐过早。',
+        extraPlacements: [
+          { id: 'sp_w_tea2', catalogId: 'tea_stall', x: -5.4, z: -2.5, rotY: 1.57 },
+          { id: 'sp_w_bn', catalogId: 'bench', x: -2.5, z: 2.7, rotY: 0 },
+          { id: 'sp_w_l1', catalogId: 'lantern', x: -2.2, z: -0.8, rotY: 0 },
+          { id: 'sp_w_dk', catalogId: 'duck', x: 1.2, z: 1.2, rotY: 0.5 },
+        ],
+      },
+      {
+        id: 'lotus_night',
+        icon: '🪷',
+        label: '荷塘夏夜',
+        season: 'summer',
+        timeMode: 'night',
+        weather: 'clear',
+        note: '荷塘夏夜：星夜灯火照亮双桥河岸与西南荷塘，红灯与农家窗光倒映水面。',
+        extraPlacements: [
+          { id: 'sp_w_nl1', catalogId: 'lantern', x: -3.2, z: 5.5, rotY: 0 },
+          { id: 'sp_w_nl2', catalogId: 'lantern', x: -7.5, z: 4.5, rotY: 0 },
+          { id: 'sp_w_lp4', catalogId: 'lilypad', x: -5.8, z: 5.6, rotY: 0.8 },
+          { id: 'sp_w_lp5', catalogId: 'lilypad', x: -4.6, z: 8.2, rotY: 2.1 },
+        ],
+      },
+    ],
     placements: [
       { id: 'w_h1', catalogId: 'wangshi_house', x: -6.4, z: -5.6, rotY: 0.08 },
       { id: 'w_h2', catalogId: 'wangshi_house', x: -3.2, z: -7.2, rotY: -0.04 },
@@ -201,6 +293,42 @@ export const PRESET_REGIONS: Record<Exclude<RegionId, 'custom'>, RegionBlueprint
       iceTop: '#cfe2ed',
       carStyle: 'cream',
     },
+    fieldNotes: {
+      spring: '五月融雪后小樽石造仓库露出暖灰砖石立面，运河游步道重现樱影。',
+      summer: '北海道盛夏清爽通透，石砌码头酒桶与长椅伴着海风惬意悠闲。',
+      autumn: '深秋红叶攀上仓库石墙，夕阳斜照运河煤气灯，柴犬巡游码头。',
+      winter: '二月雪灯之路（Snow Light Path）：厚雪覆瓦，细雪纷飞，63 盏煤气灯亮彻冰岸。',
+    },
+    specialScenes: [
+      {
+        id: 'snow_light',
+        icon: '🕯️',
+        label: '雪灯之路',
+        season: 'winter',
+        timeMode: 'night',
+        weather: 'snow',
+        note: '小樽雪灯之路（每年二月）：运河两岸增设雪灯盏盏，在冬夜蓝调中闪烁暖光。',
+        extraPlacements: [
+          { id: 'sp_o_l1', catalogId: 'lantern', x: -1.8, z: -4.0, rotY: 0 },
+          { id: 'sp_o_l2', catalogId: 'lantern', x: -1.8, z: 1.2, rotY: 0 },
+          { id: 'sp_o_l3', catalogId: 'lantern', x: 1.8, z: -1.5, rotY: 0 },
+          { id: 'sp_o_l4', catalogId: 'lantern', x: 1.8, z: 3.2, rotY: 0 },
+        ],
+      },
+      {
+        id: 'canal_thaw',
+        icon: '🌸',
+        label: '运河初春',
+        season: 'spring',
+        timeMode: 'day',
+        weather: 'breeze',
+        note: '小樽融雪初春：石造码头解冻流水，咖啡屋前摆出木箱与长椅迎客。',
+        extraPlacements: [
+          { id: 'sp_o_dk1', catalogId: 'duck', x: -0.2, z: -2.2, rotY: 0.4 },
+          { id: 'sp_o_dk2', catalogId: 'duck', x: 0.3, z: 4.5, rotY: -1.0 },
+        ],
+      },
+    ],
     placements: [
       { id: 'o_h1', catalogId: 'house_2', x: -5.8, z: -5.2, rotY: 1.57 },
       { id: 'o_inn', catalogId: 'inn', x: -5.8, z: 0.8, rotY: 1.57 },
@@ -231,6 +359,12 @@ export function cloneBlueprint(bp: RegionBlueprint): RegionBlueprint {
     ...bp,
     palette: { ...bp.palette },
     placements: bp.placements.map((p) => ({ ...p })),
+    fieldNotes: { ...bp.fieldNotes },
+    specialScenes: bp.specialScenes.map((s) => ({
+      ...s,
+      extraPlacements: s.extraPlacements?.map((ep) => ({ ...ep })),
+    })),
+    osmData: bp.osmData,
   };
 }
 
@@ -286,10 +420,21 @@ export async function fetchLiveWeather(lat: number, lon: number): Promise<LiveWe
   }
 }
 
+function hitsOsmBuilding(x: number, z: number, buildings: OsmFootprint[], pad = 1.05): boolean {
+  for (const b of buildings) {
+    if (Math.abs(x - b.cx) <= b.width * 0.5 + pad && Math.abs(z - b.cz) <= b.depth * 0.5 + pad) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function buildCustomBlueprint(
   lat: number,
   lon: number,
   live?: LiveWeatherReport,
+  osm?: OsmSceneData,
+  placeTitle?: string,
 ): RegionBlueprint {
   const absLat = Math.abs(lat);
   const isSubtropicalAsia = lat > 18 && lat < 36 && lon > 95 && lon < 130;
@@ -300,25 +445,213 @@ export function buildCustomBlueprint(
   const defaultWeather: WeatherId =
     live?.weather ?? (isCold ? 'snow' : 'breeze');
 
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  const coordText = `${Math.abs(lat).toFixed(2)}°${ns} ${Math.abs(lon).toFixed(2)}°${ew}`;
+
+  const hasLiveOsm =
+    osm !== undefined &&
+    osm.stats.source === 'osm' &&
+    (osm.buildings.length > 0 || osm.roads.length > 0 || osm.waters.length > 0);
+
+  if (hasLiveOsm && osm) {
+    const placements: PlacedItemData[] = [];
+    const nearPos = (x: number, z: number, dist = 1.1) =>
+      placements.some((p) => Math.hypot(p.x - x, p.z - z) < dist);
+
+    // 1. Mapped OSM trees (up to 16) using regional seasonal GLBs
+    let treeAdded = 0;
+    for (let i = 0; i < osm.trees.length && treeAdded < 16; i++) {
+      const tr = osm.trees[i];
+      if (hitsOsmBuilding(tr.x, tr.z, osm.buildings, 0.7)) continue;
+      if (nearPos(tr.x, tr.z, 0.9)) continue;
+      const isNearWater = osm.waters.some((w) =>
+        w.points.some(([wx, wz]) => Math.hypot(wx - tr.x, wz - tr.z) < 2.2),
+      );
+      const treeId = isCold
+        ? 'tree_pine'
+        : isNearWater && isSubtropicalAsia
+          ? 'tree_willow'
+          : i % 3 === 0
+            ? 'tree_birch'
+            : 'tree_common';
+      placements.push({
+        id: `osm_tr_${treeAdded}`,
+        catalogId: treeId,
+        x: Math.round(tr.x * 2) / 2,
+        z: Math.round(tr.z * 2) / 2,
+        rotY: (i * 1.1) % (Math.PI * 2),
+      });
+      treeAdded += 1;
+    }
+
+    // 2. Street lanterns & parked cars along actual OSM roads
+    let lanternCount = 0;
+    let carCount = 0;
+    for (let r = 0; r < osm.roads.length && (lanternCount < 4 || carCount < 2); r++) {
+      const rd = osm.roads[r];
+      if (rd.points.length < 2) continue;
+      const mid = rd.points[Math.floor(rd.points.length / 2)];
+      const prev = rd.points[Math.max(0, Math.floor(rd.points.length / 2) - 1)];
+      const next = rd.points[Math.min(rd.points.length - 1, Math.floor(rd.points.length / 2) + 1)];
+      const angle = Math.atan2(next[1] - prev[1], next[0] - prev[0]);
+      const nx = -Math.sin(angle) * (rd.width * 0.55 + 0.35);
+      const nz = Math.cos(angle) * (rd.width * 0.55 + 0.35);
+      const px = Math.max(-9.2, Math.min(9.2, Math.round((mid[0] + nx) * 2) / 2));
+      const pz = Math.max(-9.2, Math.min(9.2, Math.round((mid[1] + nz) * 2) / 2));
+
+      if (!hitsOsmBuilding(px, pz, osm.buildings, 0.65) && !nearPos(px, pz, 1.3)) {
+        if (carCount < 2 && rd.kind !== 'footway') {
+          placements.push({
+            id: `osm_car_${carCount}`,
+            catalogId: 'sedan',
+            x: px,
+            z: pz,
+            rotY: -angle,
+          });
+          carCount += 1;
+        } else if (lanternCount < 4) {
+          placements.push({
+            id: `osm_l_${lanternCount}`,
+            catalogId: 'lantern',
+            x: px,
+            z: pz,
+            rotY: 0,
+          });
+          lanternCount += 1;
+        }
+      }
+    }
+
+    // 3. Ducks on mapped water bodies
+    if (osm.waters.length > 0) {
+      const w0 = osm.waters[0];
+      const pt = w0.points[Math.floor(w0.points.length / 2)];
+      if (pt) {
+        const dx = Math.max(-8.8, Math.min(8.8, pt[0]));
+        const dz = Math.max(-8.8, Math.min(8.8, pt[1]));
+        if (!hitsOsmBuilding(dx, dz, osm.buildings, 0.4)) {
+          placements.push({ id: 'osm_dk1', catalogId: 'duck', x: dx, z: dz, rotY: 0.4 });
+        }
+      }
+    }
+
+    // 4. Rural / Sparse OSM Hybrid Fill: enrich villages & townships with regional hero models
+    if (osm.buildings.length < 5) {
+      const heroPool = isSubtropicalAsia
+        ? ['wangshi_house', 'tea_stall', 'bridge_stone', 'wangshi_house', 'tree_willow', 'shiba', 'alpaca']
+        : isCold
+          ? ['house_2', 'inn', 'tree_pine', 'bench', 'fox', 'shiba', 'barrel']
+          : ['house_1', 'greenhouse', 'mill', 'well', 'tree_common', 'alpaca', 'shiba'];
+      const spots: Array<[number, number, number]> = [
+        [-5.5, -5.0, 0.15],
+        [-2.5, 4.5, 0.25],
+        [4.5, -5.5, -0.35],
+        [6.0, 2.5, 1.57],
+        [-6.5, 2.5, 0.8],
+        [1.5, -1.5, 0.4],
+        [3.5, 6.5, -0.7],
+      ];
+      let added = 0;
+      for (let i = 0; i < spots.length && added < 7; i++) {
+        const [sx, sz, rotY] = spots[i];
+        if (!hitsOsmBuilding(sx, sz, osm.buildings, 1.2) && !nearPos(sx, sz, 1.5)) {
+          placements.push({
+            id: `osm_hyb_${added}`,
+            catalogId: heroPool[added % heroPool.length],
+            x: sx,
+            z: sz,
+            rotY,
+          });
+          added += 1;
+        }
+      }
+    }
+
+    const displayName = placeTitle?.trim() || osm.placeLabel || `OSM 街区 · ${coordText}`;
+    const hasFarm = isSubtropicalAsia && osm.greens.some((g) => g.kind === 'farmland');
+    const summaryText = `已抓取 OSM 实测轮廓：${osm.stats.buildingCount} 栋建筑、${osm.stats.roadCount} 条路网、${osm.stats.waterCount} 处水系与 ${osm.stats.treeCount} 棵登记树木（© OpenStreetMap contributors）。`;
+
+    return {
+      id: 'custom',
+      name: displayName,
+      badgeText: `${coordText} · OSM ${osm.stats.buildingCount}建筑/${osm.stats.roadCount}路${live ? ' · ' + live.summary : ''}`,
+      subtitle: '基于真实 OpenStreetMap 街道与建筑轮廓生成 · 支持自由增删建造',
+      lat,
+      lon,
+      defaultSeason,
+      defaultWeather,
+      defaultTime: 'day',
+      waterLayout: 'osm_custom',
+      hasPaddies: hasFarm,
+      palette: {
+        ...SHARED_STORYBOOK_PALETTE,
+        roofTone: isSubtropicalAsia ? '#596978' : isCold ? '#6b7d90' : '#b8765c',
+        wallTone: isSubtropicalAsia ? '#f0eae0' : '#ece4d4',
+        carStyle: isSubtropicalAsia ? 'blue' : 'cream',
+      },
+      placements,
+      fieldNotes: {
+        spring: `春景实景：${summaryText}`,
+        summer: `夏景实景：${summaryText}`,
+        autumn: `秋景实景：${summaryText}`,
+        winter: `冬景实景：${summaryText}`,
+      },
+      specialScenes: [
+        {
+          id: 'street_fair',
+          icon: '🎪',
+          label: '街头市集',
+          season: defaultSeason === 'winter' ? 'spring' : defaultSeason,
+          timeMode: 'day',
+          weather: 'breeze',
+          note: '街头市集限定切片：街口临时添置露天茶摊、木箱货摊与休闲长椅。',
+          extraPlacements: [
+            { id: 'sp_c_tea', catalogId: 'tea_stall', x: -1.5, z: 2.5, rotY: 0.4 },
+            { id: 'sp_c_bn', catalogId: 'bench', x: 1.5, z: 2.0, rotY: -0.5 },
+            { id: 'sp_c_cr', catalogId: 'crate', x: -2.5, z: 3.0, rotY: 0.2 },
+          ],
+        },
+        {
+          id: 'evening_lights',
+          icon: '🌙',
+          label: '街区华灯',
+          season: defaultSeason,
+          timeMode: 'night',
+          weather: 'clear',
+          note: '街区华灯模式：OSM 真实建筑窗格与街灯在夜色中同步点亮暖光。',
+          extraPlacements: [
+            { id: 'sp_c_l1', catalogId: 'lantern', x: -2.0, z: -2.0, rotY: 0 },
+            { id: 'sp_c_l2', catalogId: 'lantern', x: 2.5, z: 2.5, rotY: 0 },
+          ],
+        },
+      ],
+      osmData: osm,
+    };
+  }
+
   const waterLayout: WaterLayoutId = isSubtropicalAsia
     ? 'canal_pond'
     : isCold
       ? 'snow_canal'
       : 'brook_pond';
 
-  const ns = lat >= 0 ? 'N' : 'S';
-  const ew = lon >= 0 ? 'E' : 'W';
-  const coordText = `${Math.abs(lat).toFixed(2)}°${ns} ${Math.abs(lon).toFixed(2)}°${ew}`;
-
-  const placements: PlacedItemData[] = isSubtropicalAsia
-    ? PRESET_REGIONS.wangshi.placements.map((p, i) => ({ ...p, id: `c_${i}_${p.catalogId}` }))
+  const basePreset = isSubtropicalAsia
+    ? PRESET_REGIONS.wangshi
     : isCold
-      ? PRESET_REGIONS.otaru.placements.map((p, i) => ({ ...p, id: `c_${i}_${p.catalogId}` }))
-      : PRESET_REGIONS.darrowby.placements.map((p, i) => ({ ...p, id: `c_${i}_${p.catalogId}` }));
+      ? PRESET_REGIONS.otaru
+      : PRESET_REGIONS.darrowby;
+
+  const placements: PlacedItemData[] = basePreset.placements.map((p, i) => ({
+    ...p,
+    id: `c_${i}_${p.catalogId}`,
+  }));
+
+  const resolvedTitle = placeTitle?.trim() || `自定义坐标 · ${coordText}`;
 
   return {
     id: 'custom',
-    name: `自定义坐标 · ${coordText}`,
+    name: resolvedTitle,
     badgeText: live ? `${coordText} · ${live.summary}` : `${coordText} · 实时经纬生成`,
     subtitle: isSubtropicalAsia
       ? '按经纬度解析为东方水乡与稻塘聚落风貌'
@@ -339,5 +672,10 @@ export function buildCustomBlueprint(
       carStyle: isSubtropicalAsia ? 'blue' : 'cream',
     },
     placements,
+    fieldNotes: { ...basePreset.fieldNotes },
+    specialScenes: basePreset.specialScenes.map((s) => ({
+      ...s,
+      extraPlacements: s.extraPlacements?.map((ep) => ({ ...ep })),
+    })),
   };
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="theme-pocket">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -20,7 +20,7 @@
 
       <div id="loading-badge" class="loading-badge">
         <span class="dot"></span>
-        <span>正在加载 3D 建筑精模与绘本描边管线...</span>
+        <span>正在加载 3D 建筑精模与手绘描边管线...</span>
       </div>
 
       <div class="hud-overlay">
@@ -33,12 +33,15 @@
               <span id="weather-pill" class="meta-pill">冬 · 微风</span>
             </div>
             <div id="loc-sub" class="loc-sub">54.30°N 2.00°W · Yorkshire Dales</div>
-            <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 输入经纬度</button>
+            <div id="field-note" class="field-note">北约克荒原冬季寒风凛冽，玻璃温室透出暖灯，石崖悬冰成帘。</div>
+            <div id="legend-row" class="legend-row"></div>
+            <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
 
           <div class="top-controls">
             <div class="pill-group" role="group" aria-label="描边风格">
-              <button class="style-btn active" data-style="pixel">👾 像素描边</button>
+              <button class="style-btn active" data-style="pocket">📜 建筑师手绘</button>
+              <button class="style-btn" data-style="pixel">👾 像素描边</button>
               <button class="style-btn" data-style="hd">🎨 绘本描边</button>
             </div>
             <div class="pill-group">
@@ -51,10 +54,10 @@
 
         <!-- Bottom Floating Panels & Dock -->
         <footer class="hud-bottom">
-          <!-- Set the Scene Popover (Quack-style) -->
+          <!-- Set the Scene Popover -->
           <section id="scene-popover" class="glass-panel scene-popover hidden">
             <div class="panel-head">
-              <span>☀️ 场景氛围调节（实时光照 / 四季 / 日食 / 风格）</span>
+              <span>☀️ 场景氛围调节（天光 / 四季 / 气象 / 地方限定切片）</span>
               <button id="btn-close-scene" class="close-btn">✕</button>
             </div>
             <div class="scene-cols">
@@ -82,6 +85,10 @@
                 <button id="btn-sync-live" class="sync-btn">📡 同步当地实况</button>
               </div>
             </div>
+            <div class="special-scene-block">
+              <div class="col-title">🏮 地方限定场景（Special Scenes）</div>
+              <div id="special-scene-row" class="special-scene-row"></div>
+            </div>
           </section>
 
           <!-- Custom Builder / Props Tray -->
@@ -104,6 +111,14 @@
             <div id="build-hint" class="build-hint">点击地面格点摆放建筑，单指/左键按住拖拽可 360° 旋转岛屿</div>
           </section>
 
+          <!-- Camera Presets -->
+          <div id="cam-presets" class="pill-group cam-presets" role="group" aria-label="视角预设">
+            <button class="cam-btn active" data-cam="cinematic">🎬 全景</button>
+            <button class="cam-btn" data-cam="closeup">🌉 近景</button>
+            <button class="cam-btn" data-cam="street">🏘️ 街角</button>
+            <button class="cam-btn" data-cam="bird">🦅 鸟瞰</button>
+          </div>
+
           <!-- Main Floating Bottom Dock -->
           <div class="dock-bar">
             <button id="btn-toggle-build" class="dock-btn">🛠️ 建造 / 物料</button>
@@ -117,7 +132,7 @@
       <div id="region-modal" class="modal-backdrop hidden">
         <div class="glass-panel modal-card">
           <div class="panel-head">
-            <span>🌍 选择预设地域，或输入任意经纬度生成风貌岛</span>
+            <span>🌍 选择预设地域，或输入地名/经纬度生成真实 OSM 微缩岛</span>
             <button id="btn-close-regions" class="close-btn">✕</button>
           </div>
           <div class="preset-grid">
@@ -136,13 +151,23 @@
           </div>
 
           <div class="custom-coord-box">
-            <div class="col-title">自定义世界坐标（自动匹配气候带与 Open-Meteo 实时天气）</div>
-            <div class="coord-inputs">
-              <label>纬度 Lat <input id="input-lat" type="number" step="0.001" value="30.145" /></label>
-              <label>经度 Lon <input id="input-lon" type="number" step="0.001" value="113.088" /></label>
-              <button id="btn-apply-coord" class="primary-btn">✨ 生成并同步实时天气</button>
+            <div class="col-title">全球真实街区与经纬度生成（OpenStreetMap + Open-Meteo 实况联动）</div>
+            <div class="osm-quick-row">
+              <button class="osm-quick-chip" data-lat="31.2162" data-lon="121.4404" data-label="上海 · 安福路">🇨🇳 上海·安福路</button>
+              <button class="osm-quick-chip" data-lat="52.3635" data-lon="4.8960" data-label="阿姆斯特丹运河">🇳🇱 阿姆斯特丹运河</button>
+              <button class="osm-quick-chip" data-lat="35.0061" data-lon="135.7751" data-label="京都 · 祇园白川">🇯🇵 京都·祇园白川</button>
+              <button class="osm-quick-chip" data-lat="30.1448" data-lon="113.0881" data-label="湖北监利 · 网市镇">🏡 湖北监利·网市镇</button>
             </div>
-            <div id="coord-status" class="coord-status">提示：支持全球任意经纬度（如故乡坐标 30.145, 113.088）</div>
+            <div class="place-search-row">
+              <input id="input-place" type="text" placeholder="输入全球任意地名，如：上海安福路 / Kyoto Gion" />
+            </div>
+            <div class="coord-inputs">
+              <label>纬度 Lat <input id="input-lat" type="number" step="0.0001" value="31.2162" /></label>
+              <label>经度 Lon <input id="input-lon" type="number" step="0.0001" value="121.4404" /></label>
+              <button id="btn-apply-coord" class="primary-btn">✨ 拉取真实 OSM 街区 + 实时天气</button>
+            </div>
+            <div id="coord-status" class="coord-status">提示：留空地名将直接按经纬度请求真实建筑/道路/水系与实况天气</div>
+            <div class="odbl-credit">Map data © OpenStreetMap contributors · Inspired by Pocket City (MIT)</div>
           </div>
         </div>
       </div>

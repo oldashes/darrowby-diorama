@@ -2,7 +2,9 @@ import './style.css';
 import { CATALOG, CatalogItem } from './assets/modelLibrary';
 import { playChimeSound, playUiTick } from './audio/sfx';
 import { DioramaEngine } from './world/dioramaEngine';
+import { fetchOsmArea, geocodePlace } from './world/osmFetcher';
 import {
+  CameraPresetId,
   PRESET_REGIONS,
   RegionId,
   RenderStyleId,
@@ -17,13 +19,17 @@ declare global {
   interface Window {
     setRegion?: (id: Exclude<RegionId, 'custom'>) => void;
     setCustomCoords?: (lat: number, lon: number) => Promise<void>;
+    loadOsmCoords?: (lat: number, lon: number, label?: string) => Promise<void>;
     setSeason?: (s: SeasonId) => void;
     setTimeMode?: (t: TimeMode) => void;
+    setSpecialScene?: (id: string | null) => void;
     setEclipseOffset?: (offset: number) => void;
     setWeather?: (w: WeatherId) => void;
     setRenderStyle?: (st: RenderStyleId) => void;
     setCameraOrbit?: (az: number, pol: number, zoom?: number) => void;
+    setCameraPreset?: (preset: CameraPresetId) => void;
     placeCatalogItem?: (id: string, x: number, z: number, rotY?: number) => unknown;
+    getDioramaStats?: () => ReturnType<DioramaEngine['getState']>;
     __renderReady?: boolean;
     __modelsLoaded?: boolean;
     __stats?: Record<string, unknown>;
@@ -52,11 +58,14 @@ function bootstrap(): void {
   const loadingBadge = document.getElementById('loading-badge');
   const locName = document.getElementById('loc-name');
   const locSub = document.getElementById('loc-sub');
+  const fieldNote = document.getElementById('field-note');
+  const legendRow = document.getElementById('legend-row');
   const weatherPill = document.getElementById('weather-pill');
   const placedCountPill = document.getElementById('placed-count-pill');
   const buildHint = document.getElementById('build-hint');
 
   const scenePopover = document.getElementById('scene-popover');
+  const specialSceneRow = document.getElementById('special-scene-row');
   const buildDrawer = document.getElementById('build-drawer');
   const regionModal = document.getElementById('region-modal');
   const catalogStrip = document.getElementById('catalog-strip');
@@ -76,6 +85,7 @@ function bootstrap(): void {
   const btnCamReset = document.getElementById('btn-cam-reset');
   const btnSyncLive = document.getElementById('btn-sync-live');
   const btnApplyCoord = document.getElementById('btn-apply-coord');
+  const inputPlace = document.getElementById('input-place') as HTMLInputElement | null;
   const inputLat = document.getElementById('input-lat') as HTMLInputElement | null;
   const inputLon = document.getElementById('input-lon') as HTMLInputElement | null;
   const coordStatus = document.getElementById('coord-status');
@@ -86,8 +96,11 @@ function bootstrap(): void {
   const weatherBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-weather]'));
   const catTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.cat-btn'));
   const regionCards = Array.from(document.querySelectorAll<HTMLButtonElement>('.region-card'));
+  const camBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-cam]'));
+  const quickChips = Array.from(document.querySelectorAll<HTMLButtonElement>('.osm-quick-chip'));
 
   let activeCat: CatalogItem['category'] = 'building';
+  let isFetchingCustom = false;
 
   function renderCatalogStrip(): void {
     if (!catalogStrip) return;
@@ -110,15 +123,68 @@ function bootstrap(): void {
     }
   }
 
+  function renderSpecialScenes(): void {
+    if (!specialSceneRow) return;
+    const st = engine.getState();
+    specialSceneRow.innerHTML = '';
+    for (const sp of st.region.specialScenes) {
+      const btn = document.createElement('button');
+      btn.className = 'special-chip';
+      btn.dataset.special = sp.id;
+      if (st.activeSpecialSceneId === sp.id) btn.classList.add('active');
+      btn.textContent = `${sp.icon} ${sp.label}`;
+      btn.addEventListener('click', () => {
+        playChimeSound();
+        engine.setSpecialScene(sp.id);
+      });
+      specialSceneRow.appendChild(btn);
+    }
+  }
+
   function syncHud(): void {
     const st = engine.getState();
+    const isLightPaper =
+      st.renderStyle === 'pocket' && st.timeMode !== 'night' && st.timeMode !== 'eclipse';
+    document.documentElement.classList.toggle('theme-pocket', isLightPaper);
+
     if (locName) locName.textContent = st.region.name;
     if (locSub) locSub.textContent = st.region.badgeText;
+
+    if (fieldNote) {
+      const activeSpecial = st.region.specialScenes.find(
+        (s) => s.id === st.activeSpecialSceneId,
+      );
+      fieldNote.textContent = activeSpecial
+        ? activeSpecial.note
+        : st.region.fieldNotes[st.season] || st.region.subtitle;
+    }
+
+    if (legendRow) {
+      const parts = [
+        `<span class="legend-pill">🏠 ${st.legendCounts.buildings}</span>`,
+        `<span class="legend-pill">🌳 ${st.legendCounts.nature}</span>`,
+        `<span class="legend-pill">🐑 ${st.legendCounts.living}</span>`,
+      ];
+      if (st.osmBuildingCount > 0 || st.osmRoadCount > 0) {
+        parts.push(`<span class="legend-pill">🗺️ OSM ${st.osmBuildingCount}栋/${st.osmRoadCount}路</span>`);
+      }
+      legendRow.innerHTML = parts.join('');
+    }
+
     if (weatherPill) {
-      const timeTag = st.timeMode === 'eclipse' ? ' · 日食' : st.timeMode === 'night' ? ' · 夜' : '';
+      const activeSpecial = st.region.specialScenes.find(
+        (s) => s.id === st.activeSpecialSceneId,
+      );
+      const timeTag = activeSpecial
+        ? ` · ${activeSpecial.label}`
+        : st.timeMode === 'eclipse'
+          ? ' · 日食'
+          : st.timeMode === 'night'
+            ? ' · 夜'
+            : '';
       weatherPill.textContent = `${SEASON_LABELS[st.season]} · ${WEATHER_LABELS[st.weather]}${timeTag}`;
     }
-    if (placedCountPill) placedCountPill.textContent = `共 ${st.placedCount} 处景物`;
+    if (placedCountPill) placedCountPill.textContent = `共 ${st.placedCount} 处可改建`;
 
     for (const b of styleBtns) b.classList.toggle('active', b.dataset.style === st.renderStyle);
     for (const b of timeBtns) b.classList.toggle('active', b.dataset.time === st.timeMode);
@@ -145,6 +211,7 @@ function bootstrap(): void {
       }
     }
 
+    renderSpecialScenes();
     renderCatalogStrip();
     window.__modelsLoaded = st.modelsLoaded;
     window.__stats = {
@@ -153,8 +220,11 @@ function bootstrap(): void {
       timeMode: st.timeMode,
       weather: st.weather,
       renderStyle: st.renderStyle,
+      activeSpecialSceneId: st.activeSpecialSceneId,
       toolMode: st.toolMode,
       placedCount: st.placedCount,
+      osmBuildingCount: st.osmBuildingCount,
+      osmRoadCount: st.osmRoadCount,
       modelsLoaded: st.modelsLoaded,
       cameraAzimuth: st.cameraAzimuth,
       cameraPolar: st.cameraPolar,
@@ -170,6 +240,38 @@ function bootstrap(): void {
       syncHud();
     },
   );
+
+  async function applyCustomLocation(lat: number, lon: number, label?: string): Promise<void> {
+    if (isFetchingCustom) return;
+    isFetchingCustom = true;
+    if (btnApplyCoord) btnApplyCoord.textContent = '⏳ 正在拉取 OSM 街区与气象...';
+    if (coordStatus) coordStatus.textContent = '正在请求 OpenStreetMap 建筑/道路/水系及 Open-Meteo 实况...';
+
+    try {
+      const [osmRes, liveRes] = await Promise.allSettled([
+        fetchOsmArea(lat, lon, label, 200),
+        fetchLiveWeather(lat, lon),
+      ]);
+      const osm = osmRes.status === 'fulfilled' ? osmRes.value : undefined;
+      const live = liveRes.status === 'fulfilled' ? liveRes.value : undefined;
+
+      const bp = buildCustomBlueprint(lat, lon, live, osm, label);
+      engine.setRegion(bp);
+      playChimeSound();
+
+      if (coordStatus) {
+        if (osm && osm.stats.source === 'osm' && (osm.buildings.length > 0 || osm.roads.length > 0)) {
+          coordStatus.textContent = `已加载 OSM 街区（${osm.stats.buildingCount}栋建筑 / ${osm.stats.roadCount}条路网）${live ? ' · ' + live.summary : ''}`;
+        } else {
+          coordStatus.textContent = `该位置 OSM 公开轮廓较少，已按气候地貌混合生成${live ? ' · ' + live.summary : ''}`;
+        }
+      }
+      regionModal?.classList.add('hidden');
+    } finally {
+      isFetchingCustom = false;
+      if (btnApplyCoord) btnApplyCoord.textContent = '✨ 拉取真实 OSM 街区 + 实时天气';
+    }
+  }
 
   // URL overrides for deterministic testing or deep linking
   const params = new URLSearchParams(window.location.search);
@@ -190,35 +292,34 @@ function bootstrap(): void {
     engine.setWeather(qWeather);
   }
   const qStyle = params.get('style') as RenderStyleId | null;
-  if (qStyle && ['hd', 'pixel'].includes(qStyle)) {
+  if (qStyle && ['pocket', 'pixel', 'hd'].includes(qStyle)) {
     engine.setRenderStyle(qStyle);
   }
 
   // Expose QA / Automation API
+  window.getDioramaStats = () => engine.getState();
   window.setRegion = (id) => {
     if (PRESET_REGIONS[id]) engine.setRegion(PRESET_REGIONS[id]);
   };
-  window.setCustomCoords = async (lat, lon) => {
-    try {
-      const live = await fetchLiveWeather(lat, lon);
-      engine.setRegion(buildCustomBlueprint(lat, lon, live));
-    } catch {
-      engine.setRegion(buildCustomBlueprint(lat, lon));
-    }
-  };
+  window.setCustomCoords = async (lat, lon) => applyCustomLocation(lat, lon);
+  window.loadOsmCoords = async (lat, lon, label) => applyCustomLocation(lat, lon, label);
   window.setSeason = (s) => engine.setSeason(s);
   window.setTimeMode = (t) => engine.setTimeMode(t);
+  window.setSpecialScene = (id) => engine.setSpecialScene(id);
   window.setEclipseOffset = (off) => engine.setEclipseOffset(off);
   window.setWeather = (w) => engine.setWeather(w);
   window.setRenderStyle = (st) => engine.setRenderStyle(st);
   window.setCameraOrbit = (az, pol, zoom) => engine.setCameraOrbit(az, pol, zoom);
+  window.setCameraPreset = (preset) => engine.setCameraPreset(preset);
   window.placeCatalogItem = (id, x, z, rotY) => engine.placeCatalogItem(id, x, z, rotY);
 
   // Wire UI Events
   for (const b of styleBtns) {
     b.addEventListener('click', () => {
       playUiTick();
-      engine.setRenderStyle(b.dataset.style === 'hd' ? 'hd' : 'pixel');
+      const s = b.dataset.style;
+      const styleId: RenderStyleId = s === 'pixel' ? 'pixel' : s === 'hd' ? 'hd' : 'pocket';
+      engine.setRenderStyle(styleId);
     });
   }
   for (const b of timeBtns) {
@@ -248,6 +349,13 @@ function bootstrap(): void {
       syncHud();
     });
   }
+  for (const b of camBtns) {
+    b.addEventListener('click', () => {
+      playUiTick();
+      for (const other of camBtns) other.classList.toggle('active', other === b);
+      engine.setCameraPreset((b.dataset.cam as CameraPresetId) || 'cinematic');
+    });
+  }
   for (const card of regionCards) {
     card.addEventListener('click', () => {
       const rid = card.dataset.region as Exclude<RegionId, 'custom'>;
@@ -256,6 +364,17 @@ function bootstrap(): void {
         engine.setRegion(PRESET_REGIONS[rid]);
         regionModal?.classList.add('hidden');
       }
+    });
+  }
+  for (const chip of quickChips) {
+    chip.addEventListener('click', () => {
+      const lat = Number(chip.dataset.lat);
+      const lon = Number(chip.dataset.lon);
+      const label = chip.dataset.label || '';
+      if (inputLat) inputLat.value = String(lat);
+      if (inputLon) inputLon.value = String(lon);
+      if (inputPlace) inputPlace.value = '';
+      void applyCustomLocation(lat, lon, label);
     });
   }
 
@@ -318,7 +437,10 @@ function bootstrap(): void {
 
   btnOrbitLeft?.addEventListener('click', () => engine.orbitRotateBy(Math.PI * 0.25));
   btnOrbitRight?.addEventListener('click', () => engine.orbitRotateBy(-Math.PI * 0.25));
-  btnCamReset?.addEventListener('click', () => engine.resetCamera());
+  btnCamReset?.addEventListener('click', () => {
+    for (const b of camBtns) b.classList.toggle('active', b.dataset.cam === 'cinematic');
+    engine.resetCamera();
+  });
 
   btnSyncLive?.addEventListener('click', async () => {
     const st = engine.getState();
@@ -336,24 +458,42 @@ function bootstrap(): void {
     }
   });
 
-  btnApplyCoord?.addEventListener('click', async () => {
-    const lat = Number(inputLat?.value ?? 30.145);
-    const lon = Number(inputLon?.value ?? 113.088);
+  async function handleCustomSubmit(): Promise<void> {
+    const placeText = inputPlace?.value.trim() ?? '';
+    if (placeText.length > 0) {
+      if (coordStatus) coordStatus.textContent = `正在解析地名「${placeText}」的全球坐标...`;
+      if (btnApplyCoord) btnApplyCoord.textContent = '⏳ 检索地名...';
+      try {
+        const geo = await geocodePlace(placeText);
+        if (inputLat) inputLat.value = geo.lat.toFixed(4);
+        if (inputLon) inputLon.value = geo.lon.toFixed(4);
+        await applyCustomLocation(geo.lat, geo.lon, geo.displayName);
+      } catch (err) {
+        if (btnApplyCoord) btnApplyCoord.textContent = '✨ 拉取真实 OSM 街区 + 实时天气';
+        if (coordStatus) {
+          coordStatus.textContent = err instanceof Error ? err.message : '地名解析失败，请直接输入经纬度';
+        }
+      }
+      return;
+    }
+
+    const lat = Number(inputLat?.value ?? 31.2162);
+    const lon = Number(inputLon?.value ?? 121.4404);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
       if (coordStatus) coordStatus.textContent = '请输入有效经纬度（纬度 -90~90，经度 -180~180）';
       return;
     }
-    if (coordStatus) coordStatus.textContent = '正在获取 Open-Meteo 当地实况气象并生成微缩岛...';
-    try {
-      const live = await fetchLiveWeather(lat, lon);
-      engine.setRegion(buildCustomBlueprint(lat, lon, live));
-      playChimeSound();
-      if (coordStatus) coordStatus.textContent = `已同步当地实况：${live.summary}`;
-    } catch {
-      engine.setRegion(buildCustomBlueprint(lat, lon));
-      if (coordStatus) coordStatus.textContent = '实时天气接口超时，已按纬度气候规则离线生成地貌！';
+    await applyCustomLocation(lat, lon);
+  }
+
+  btnApplyCoord?.addEventListener('click', () => {
+    void handleCustomSubmit();
+  });
+  inputPlace?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void handleCustomSubmit();
     }
-    regionModal?.classList.add('hidden');
   });
 
   // Canvas tap vs drag-to-orbit disambiguation (6px threshold)

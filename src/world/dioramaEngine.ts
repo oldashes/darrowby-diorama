@@ -10,6 +10,7 @@ import {
 import { playPlaceSound, playRemoveSound } from '../audio/sfx';
 import { InkPipeline } from '../render/inkPipeline';
 import {
+  CameraPresetId,
   PRESET_REGIONS,
   PlacedItemData,
   RegionBlueprint,
@@ -205,6 +206,97 @@ export function buildIslandGroundTexture(
         );
       }
     }
+  } else if (region.waterLayout === 'osm_custom' && region.osmData) {
+    const osm = region.osmData;
+    const fillPoly = (pts: Array<[number, number]>, color: string) => {
+      if (pts.length < 3) return;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      pts.forEach(([wx, wz], idx) => {
+        if (idx === 0) ctx.moveTo(toPx(wx), toPx(wz));
+        else ctx.lineTo(toPx(wx), toPx(wz));
+      });
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    // 1. OSM parks, woods & farmland
+    for (const g of osm.greens) {
+      if (g.kind === 'farmland') {
+        fillPoly(
+          g.points,
+          season === 'winter' ? '#b8d0d6' : season === 'autumn' ? '#d4b85b' : '#b5c966',
+        );
+      } else if (g.kind === 'wood') {
+        fillPoly(
+          g.points,
+          season === 'winter'
+            ? 'rgba(210,214,210,0.72)'
+            : season === 'autumn'
+              ? 'rgba(182,134,62,0.72)'
+              : 'rgba(116,152,92,0.72)',
+        );
+      } else {
+        fillPoly(
+          g.points,
+          season === 'winter'
+            ? 'rgba(224,224,218,0.68)'
+            : season === 'autumn'
+              ? 'rgba(196,156,86,0.65)'
+              : 'rgba(148,186,114,0.65)',
+        );
+      }
+    }
+
+    // 2. OSM lakes, rivers & canals bank rims
+    const bankCol = season === 'winter' ? '#a5b5b8' : '#7b897a';
+    for (const w of osm.waters) {
+      if (w.isPolygon) {
+        fillPoly(w.points, bankCol);
+      } else if (w.points.length >= 2) {
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = bankCol;
+        ctx.lineWidth = ((w.width + 0.45) / (ISLAND_HALF * 2)) * size;
+        ctx.beginPath();
+        w.points.forEach(([wx, wz], idx) => {
+          if (idx === 0) ctx.moveTo(toPx(wx), toPx(wz));
+          else ctx.lineTo(toPx(wx), toPx(wz));
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 3. OSM street network (sorted footways first, primary avenues last)
+    const sortedRoads = [...osm.roads].sort((a, b) => a.width - b.width);
+    for (const rd of sortedRoads) {
+      if (rd.points.length < 2) continue;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = season === 'winter' ? '#b8b09e' : '#a49880';
+      ctx.lineWidth = ((rd.width + 0.28) / (ISLAND_HALF * 2)) * size;
+      ctx.beginPath();
+      rd.points.forEach(([wx, wz], idx) => {
+        if (idx === 0) ctx.moveTo(toPx(wx), toPx(wz));
+        else ctx.lineTo(toPx(wx), toPx(wz));
+      });
+      ctx.stroke();
+
+      ctx.strokeStyle =
+        rd.kind === 'footway'
+          ? season === 'winter'
+            ? '#e2ded2'
+            : '#dfd5bf'
+          : season === 'winter'
+            ? '#dcd8cc'
+            : '#cbc3b2';
+      ctx.lineWidth = (rd.width / (ISLAND_HALF * 2)) * size;
+      ctx.stroke();
+      ctx.restore();
+    }
   } else {
     // Otaru stone wharf quays flanking straight canal x=0
     ctx.fillStyle = season === 'winter' ? '#cbd0d4' : '#aeb3b8';
@@ -259,6 +351,43 @@ export function buildCliffTexture(region: RegionBlueprint): THREE.CanvasTexture 
   return tex;
 }
 
+function buildOsmFacadeTexture(wallHex: string, isHighrise: boolean): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = wallHex;
+  ctx.fillRect(0, 0, 128, 128);
+
+  // Subtle floor stringcourse bands & architectural ink window panes
+  ctx.fillStyle = 'rgba(92, 82, 72, 0.14)';
+  for (let y = 0; y < 128; y += 32) {
+    ctx.fillRect(0, y, 128, 2);
+  }
+
+  for (let row = 0; row < 4; row++) {
+    const wy = row * 32 + 8;
+    for (let col = 0; col < 4; col++) {
+      const wx = col * 32 + 7;
+      ctx.fillStyle = isHighrise ? '#6c8599' : '#657a8a';
+      ctx.fillRect(wx, wy, 18, 16);
+      ctx.fillStyle = 'rgba(232, 240, 246, 0.36)';
+      ctx.fillRect(wx + 2, wy + 2, 6, 12);
+      ctx.strokeStyle = 'rgba(42, 36, 30, 0.42)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(wx, wy, 18, 16);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(0.32, 0.36);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export class DioramaEngine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -281,6 +410,7 @@ export class DioramaEngine {
 
   private islandGroup = new THREE.Group();
   private placedGroup = new THREE.Group();
+  private festiveGroup = new THREE.Group();
   private fxGroup = new THREE.Group();
   private ghostGroup = new THREE.Group();
   private waterMeshes: THREE.Mesh[] = [];
@@ -292,6 +422,7 @@ export class DioramaEngine {
   private waterMat: THREE.MeshLambertMaterial | null = null;
   private cliffTex: THREE.CanvasTexture | null = null;
   private groundTex: THREE.CanvasTexture | null = null;
+  private osmTextures: THREE.CanvasTexture[] = [];
 
   private breezeRibbons: BreezeRibbon[] = [];
   private smokePuffs: SmokePuff[] = [];
@@ -301,6 +432,7 @@ export class DioramaEngine {
   private weatherMat: THREE.PointsMaterial | null = null;
 
   private placedEntries: LivePlacedEntry[] = [];
+  private festiveEntries: LivePlacedEntry[] = [];
   private raycaster = new THREE.Raycaster();
   private pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.02);
 
@@ -309,7 +441,9 @@ export class DioramaEngine {
   private season: SeasonId = 'winter';
   private timeMode: TimeMode = 'day';
   private weather: WeatherId = 'breeze';
-  private renderStyle: RenderStyleId = 'pixel';
+  private renderStyle: RenderStyleId = 'pocket';
+  private activeSpecialSceneId: string | null = null;
+  private cameraTween: { targetAz: number; targetPol: number; targetZoom: number } | null = null;
 
   private toolMode: BuildToolMode = 'view';
   private selectedCatalogId = 'greenhouse';
@@ -363,6 +497,9 @@ export class DioramaEngine {
     this.controls.maxPolarAngle = 1.24;
     this.controls.target.set(0, 0.35, 0);
     this.controls.update();
+    this.controls.addEventListener('start', () => {
+      this.cameraTween = null;
+    });
 
     this.sunLight.position.set(16, 22, 12);
     this.sunLight.castShadow = true;
@@ -381,6 +518,7 @@ export class DioramaEngine {
     this.scene.add(this.sunLight);
     this.scene.add(this.islandGroup);
     this.scene.add(this.placedGroup);
+    this.scene.add(this.festiveGroup);
     this.scene.add(this.fxGroup);
     this.scene.add(this.ghostGroup);
 
@@ -400,17 +538,32 @@ export class DioramaEngine {
   }
 
   getState() {
+    let buildings = this.region.osmData?.buildings.length ?? 0;
+    let nature = 0;
+    let living = 0;
+    for (const e of [...this.placedEntries, ...this.festiveEntries]) {
+      const cat = CATALOG_MAP.get(e.data.catalogId)?.category;
+      if (cat === 'building') buildings += 1;
+      else if (cat === 'living') living += 1;
+      else if (cat === 'nature') nature += 1;
+    }
+
     return {
       region: this.region,
       season: this.season,
       timeMode: this.timeMode,
       weather: this.weather,
       renderStyle: this.renderStyle,
+      activeSpecialSceneId: this.activeSpecialSceneId,
       toolMode: this.toolMode,
       selectedCatalogId: this.selectedCatalogId,
       previewRotY: this.previewRotY,
       modelsLoaded: this.modelsLoaded,
       placedCount: this.placedEntries.length,
+      osmBuildingCount: this.region.osmData?.buildings.length ?? 0,
+      osmRoadCount: this.region.osmData?.roads.length ?? 0,
+      osmWaterCount: this.region.osmData?.waters.length ?? 0,
+      legendCounts: { buildings, nature, living },
       cameraAzimuth: this.controls.getAzimuthalAngle(),
       cameraPolar: this.controls.getPolarAngle(),
       cameraZoom: this.camera.zoom,
@@ -475,6 +628,8 @@ export class DioramaEngine {
     this.waterMeshes = [];
     this.groundTex?.dispose();
     this.cliffTex?.dispose();
+    for (const tex of this.osmTextures) tex.dispose();
+    this.osmTextures = [];
 
     this.groundTex = buildIslandGroundTexture(this.region, this.season);
     this.cliffTex = buildCliffTexture(this.region);
@@ -551,10 +706,129 @@ export class DioramaEngine {
       this.islandGroup.add(pond);
       this.waterMeshes.push(pond);
       fallX = 1.1;
+    } else if (this.region.waterLayout === 'osm_custom' && this.region.osmData) {
+      const osm = this.region.osmData;
+      // 3D OSM Waterbodies (canal/river/lake)
+      for (const w of osm.waters) {
+        if (w.isPolygon && w.points.length >= 3) {
+          const shape = new THREE.Shape();
+          w.points.forEach(([x, z], idx) => {
+            if (idx === 0) shape.moveTo(x, -z);
+            else shape.lineTo(x, -z);
+          });
+          shape.closePath();
+          const wGeo = new THREE.ShapeGeometry(shape);
+          wGeo.rotateX(-Math.PI / 2);
+          const wm = new THREE.Mesh(wGeo, this.waterMat);
+          wm.position.y = 0.02;
+          wm.receiveShadow = true;
+          this.islandGroup.add(wm);
+          this.waterMeshes.push(wm);
+        } else if (w.points.length >= 2) {
+          for (let i = 0; i < w.points.length - 1; i++) {
+            const [ax, az] = w.points[i];
+            const [bx, bz] = w.points[i + 1];
+            const segLen = Math.hypot(bx - ax, bz - az);
+            if (segLen < 0.08) continue;
+            const wm = new THREE.Mesh(
+              new THREE.BoxGeometry(segLen + w.width * 0.35, 0.04, w.width),
+              this.waterMat,
+            );
+            wm.position.set((ax + bx) * 0.5, 0.018, (az + bz) * 0.5);
+            wm.rotation.y = -Math.atan2(bz - az, bx - ax);
+            wm.receiveShadow = true;
+            this.islandGroup.add(wm);
+            this.waterMeshes.push(wm);
+          }
+        }
+      }
+      if (osm.waters.length > 0 && osm.waters[0].points.length > 0) {
+        fallX = Math.max(-7.5, Math.min(7.5, osm.waters[0].points[0][0]));
+      }
+
+      // 3D Extruded Real-World Architectural Buildings from OSM footprints
+      if (osm.buildings.length > 0) {
+        const wallHexes = ['#ece4d4', '#dfbeab', '#d5dcd0', '#e7d5b0'];
+        const wallMats = wallHexes.map((hex, idx) => {
+          const tex = buildOsmFacadeTexture(hex, idx === 2);
+          this.osmTextures.push(tex);
+          const m = new THREE.MeshLambertMaterial({ map: tex, flatShading: true });
+          attachStorybookSurfaceShader(m, this.uniforms, { snowCap: true, isWindow: false });
+          return m;
+        });
+        const roofHexes = [this.region.palette.roofTone, '#b86e54', '#5c6a78', '#7d7a72'];
+        const roofMats = roofHexes.map((hex) => {
+          const m = new THREE.MeshLambertMaterial({ color: hex, flatShading: true });
+          attachStorybookSurfaceShader(m, this.uniforms, { snowCap: true, isWindow: false });
+          return m;
+        });
+        const glowWinMat = new THREE.MeshLambertMaterial({ color: '#6b7d8e', flatShading: true });
+        attachStorybookSurfaceShader(glowWinMat, this.uniforms, { snowCap: false, isWindow: true });
+
+        osm.buildings.forEach((b, bIdx) => {
+          if (b.points.length < 3) return;
+          const shape = new THREE.Shape();
+          b.points.forEach(([x, z], idx) => {
+            if (idx === 0) shape.moveTo(x, -z);
+            else shape.lineTo(x, -z);
+          });
+          shape.closePath();
+
+          const geo = new THREE.ExtrudeGeometry(shape, {
+            depth: b.height,
+            bevelEnabled: false,
+            curveSegments: 1,
+          });
+          geo.rotateX(-Math.PI / 2);
+
+          const wMat = wallMats[bIdx % wallMats.length];
+          const rMat = roofMats[bIdx % roofMats.length];
+          const mesh = new THREE.Mesh(geo, [rMat, wMat]);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          this.islandGroup.add(mesh);
+
+          // Low-rise pitched roof crown on smaller houses for Pocket City silhouette charm
+          if (b.levels <= 4 && b.width > 0.7 && b.depth > 0.7 && b.width < 4.5 && b.depth < 4.5) {
+            const major = Math.max(b.width, b.depth) * 0.72;
+            const minor = Math.min(b.width, b.depth) * 0.62;
+            const pitchMesh = new THREE.Mesh(new THREE.ConeGeometry(Math.max(0.45, minor * 0.62), Math.min(0.65, major * 0.25), 4), rMat);
+            pitchMesh.position.set(b.cx, b.height + Math.min(0.3, major * 0.12), b.cz);
+            pitchMesh.rotation.y = b.rotY + Math.PI * 0.25;
+            pitchMesh.castShadow = true;
+            this.islandGroup.add(pitchMesh);
+          }
+
+          // Night-time lit window accent collar hugging exact OSM footprint
+          if (b.width > 0.6 && b.depth > 0.6) {
+            const winShape = new THREE.Shape();
+            b.points.forEach(([x, z], idx) => {
+              const sx = b.cx + (x - b.cx) * 1.012;
+              const sz = b.cz + (z - b.cz) * 1.012;
+              if (idx === 0) winShape.moveTo(sx, -sz);
+              else winShape.lineTo(sx, -sz);
+            });
+            winShape.closePath();
+            const bandDepth = Math.min(0.28, b.height * 0.22);
+            const winGeo = new THREE.ExtrudeGeometry(winShape, {
+              depth: bandDepth,
+              bevelEnabled: false,
+              curveSegments: 1,
+            });
+            winGeo.rotateX(-Math.PI / 2);
+            const winBand = new THREE.Mesh(winGeo, glowWinMat);
+            winBand.position.y = Math.min(b.height * 0.44, 1.15);
+            this.islandGroup.add(winBand);
+          }
+        });
+      }
     } else {
       addWaterStrip(2.6, 22.0, 0, 0, 0);
       fallX = 0.0;
     }
+
+    const hasSurfaceWater =
+      this.region.waterLayout !== 'osm_custom' || (this.region.osmData?.waters.length ?? 0) > 0;
 
     // Waterfall cascading off the front cliff (or hanging crystalline icicles in winter!)
     const cascMat = new THREE.MeshLambertMaterial({
@@ -587,8 +861,8 @@ export class DioramaEngine {
       this.icicleGroup.add(cone);
     }
 
-    this.cascadeGroup.visible = !isFrozen;
-    this.icicleGroup.visible = isFrozen;
+    this.cascadeGroup.visible = hasSurfaceWater && !isFrozen;
+    this.icicleGroup.visible = hasSurfaceWater && isFrozen;
     this.fxGroup.add(this.cascadeGroup);
     this.fxGroup.add(this.icicleGroup);
 
@@ -663,17 +937,21 @@ export class DioramaEngine {
   }
 
   private storageKey(id: RegionId): string {
+    if (id === 'custom') {
+      return `${STORAGE_PREFIX}custom_${this.region.lat.toFixed(3)}_${this.region.lon.toFixed(3)}_${this.region.waterLayout}`;
+    }
     return `${STORAGE_PREFIX}${id}`;
   }
 
   private loadRegionPlacementsFromStorage(): void {
-    const inMem = this.customSavedPositions.get(this.region.id);
+    const key = this.storageKey(this.region.id);
+    const inMem = this.customSavedPositions.get(key);
     if (inMem) {
       this.region.placements = inMem.map((p) => ({ ...p }));
       return;
     }
     try {
-      const raw = window.localStorage.getItem(this.storageKey(this.region.id));
+      const raw = window.localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw) as PlacedItemData[];
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -686,11 +964,12 @@ export class DioramaEngine {
   }
 
   private savePlacements(): void {
+    const key = this.storageKey(this.region.id);
     const snapshot = this.placedEntries.map((e) => ({ ...e.data }));
     this.region.placements = snapshot;
-    this.customSavedPositions.set(this.region.id, snapshot);
+    this.customSavedPositions.set(key, snapshot);
     try {
-      window.localStorage.setItem(this.storageKey(this.region.id), JSON.stringify(snapshot));
+      window.localStorage.setItem(key, JSON.stringify(snapshot));
     } catch {
       // Ignore storage failures
     }
@@ -845,6 +1124,13 @@ export class DioramaEngine {
       this.uniforms.uUmbraStrength.value = 0.0;
     }
 
+    if (this.renderStyle === 'pocket') {
+      bgHex =
+        this.timeMode === 'night' || this.timeMode === 'eclipse'
+          ? '#1e2534'
+          : '#f2ede0';
+    }
+
     this.sunLight.color.set(sunCol);
     this.sunLight.intensity = sunInt;
     this.sunLight.position.set(...sunPos);
@@ -857,7 +1143,7 @@ export class DioramaEngine {
     this.uniforms.uWindowGlow.value = windowGlow;
     this.uniforms.uSkyTint.value.set(skyTint);
 
-    for (const e of this.placedEntries) {
+    for (const e of [...this.placedEntries, ...this.festiveEntries]) {
       if (e.asset.pointLight) {
         const isEclipse = this.timeMode === 'eclipse';
         const uProj = e.data.x * 0.8944 + e.data.z * 0.4472;
@@ -894,8 +1180,17 @@ export class DioramaEngine {
     }
   }
 
+  private clearSpecialSceneLayer(): void {
+    while (this.festiveGroup.children.length > 0) {
+      this.festiveGroup.remove(this.festiveGroup.children[0]);
+    }
+    this.festiveEntries = [];
+    this.activeSpecialSceneId = null;
+  }
+
   // Public API
   setRegion(bp: RegionBlueprint): void {
+    this.clearSpecialSceneLayer();
     this.region = cloneBlueprint(bp);
     this.season = bp.defaultSeason;
     this.weather = bp.defaultWeather;
@@ -910,9 +1205,11 @@ export class DioramaEngine {
   }
 
   resetRegionToDefault(): void {
-    this.customSavedPositions.delete(this.region.id);
+    this.clearSpecialSceneLayer();
+    const key = this.storageKey(this.region.id);
+    this.customSavedPositions.delete(key);
     try {
-      window.localStorage.removeItem(this.storageKey(this.region.id));
+      window.localStorage.removeItem(key);
     } catch {
       // ignore
     }
@@ -924,6 +1221,7 @@ export class DioramaEngine {
   }
 
   setSeason(season: SeasonId): void {
+    this.clearSpecialSceneLayer();
     this.season = season;
     this.rebuildIslandGeometry();
     this.rebuildPlacedModels();
@@ -933,6 +1231,7 @@ export class DioramaEngine {
   }
 
   setTimeMode(mode: TimeMode): void {
+    this.clearSpecialSceneLayer();
     this.timeMode = mode;
     if (mode !== 'eclipse') this.manualEclipseOffset = null;
     this.applyAtmosphere();
@@ -940,6 +1239,7 @@ export class DioramaEngine {
   }
 
   setEclipseOffset(offset: number): void {
+    this.clearSpecialSceneLayer();
     this.timeMode = 'eclipse';
     this.manualEclipseOffset = offset;
     this.uniforms.uUmbraOffset.value = offset;
@@ -948,9 +1248,74 @@ export class DioramaEngine {
   }
 
   setWeather(w: WeatherId): void {
+    this.clearSpecialSceneLayer();
     this.weather = w;
     this.applyAtmosphere();
     this.onStateChanged?.();
+  }
+
+  setSpecialScene(sceneId: string | null): void {
+    if (!sceneId || this.activeSpecialSceneId === sceneId) {
+      this.clearSpecialSceneLayer();
+      this.applyAtmosphere();
+      this.onStateChanged?.();
+      return;
+    }
+
+    const sp = this.region.specialScenes.find((s) => s.id === sceneId);
+    if (!sp) {
+      this.clearSpecialSceneLayer();
+      this.onStateChanged?.();
+      return;
+    }
+
+    while (this.festiveGroup.children.length > 0) {
+      this.festiveGroup.remove(this.festiveGroup.children[0]);
+    }
+    this.festiveEntries = [];
+    this.activeSpecialSceneId = sp.id;
+
+    const seasonChanged = this.season !== sp.season;
+    this.season = sp.season;
+    this.timeMode = sp.timeMode;
+    this.weather = sp.weather;
+    this.manualEclipseOffset = null;
+
+    if (seasonChanged) {
+      this.rebuildIslandGeometry();
+      this.rebuildPlacedModels();
+      this.rebuildGhostPreview();
+    }
+
+    if (this.modelsLoaded && sp.extraPlacements) {
+      for (const ep of sp.extraPlacements) {
+        if (!CATALOG_MAP.has(ep.catalogId)) continue;
+        const asset = this.models.createInstance(ep.catalogId, this.region, this.season, this.uniforms);
+        asset.root.position.set(ep.x, 0, ep.z);
+        asset.root.rotation.y = ep.rotY;
+        asset.root.scale.setScalar(0.25);
+        this.festiveGroup.add(asset.root);
+        this.festiveEntries.push({
+          data: { ...ep },
+          asset,
+          popAnim: 0.05,
+          baseY: ep.catalogId === 'duck' || ep.catalogId === 'lilypad' ? 0.02 : 0,
+        });
+      }
+    }
+
+    this.applyAtmosphere();
+    this.onStateChanged?.();
+  }
+
+  setCameraPreset(preset: CameraPresetId): void {
+    const map: Record<CameraPresetId, { targetAz: number; targetPol: number; targetZoom: number }> = {
+      cinematic: { targetAz: Math.PI * 0.25, targetPol: 0.9, targetZoom: 1.0 },
+      closeup: { targetAz: 0.48, targetPol: 1.06, targetZoom: 1.65 },
+      street: { targetAz: -0.62, targetPol: 1.12, targetZoom: 1.55 },
+      bird: { targetAz: Math.PI * 0.25, targetPol: 0.42, targetZoom: 0.92 },
+    };
+    this.cameraTween = { ...map[preset] };
   }
 
   setRenderStyle(style: RenderStyleId): void {
@@ -958,6 +1323,7 @@ export class DioramaEngine {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.pipeline.resize(w, h, window.devicePixelRatio || 1, style);
+    this.applyAtmosphere();
     this.onStateChanged?.();
   }
 
@@ -1136,6 +1502,34 @@ export class DioramaEngine {
 
   step(dt: number): void {
     this.simTime += dt;
+
+    // Smooth camera preset tweening
+    if (this.cameraTween) {
+      const k = Math.min(1, dt * 6.5);
+      const curAz = this.controls.getAzimuthalAngle();
+      const curPol = this.controls.getPolarAngle();
+      const dAz = Math.atan2(
+        Math.sin(this.cameraTween.targetAz - curAz),
+        Math.cos(this.cameraTween.targetAz - curAz),
+      );
+      const dPol = this.cameraTween.targetPol - curPol;
+      const dZoom = this.cameraTween.targetZoom - this.camera.zoom;
+
+      const nextAz = curAz + dAz * k;
+      const nextPol = Math.max(0.35, Math.min(1.24, curPol + dPol * k));
+      const nextZoom = Math.max(0.65, Math.min(2.6, this.camera.zoom + dZoom * k));
+      this.setCameraOrbit(nextAz, nextPol, nextZoom);
+
+      if (Math.abs(dAz) < 0.008 && Math.abs(dPol) < 0.008 && Math.abs(dZoom) < 0.008) {
+        this.setCameraOrbit(
+          this.cameraTween.targetAz,
+          this.cameraTween.targetPol,
+          this.cameraTween.targetZoom,
+        );
+        this.cameraTween = null;
+      }
+    }
+
     this.controls.update();
 
     // Update Eclipse Umbra sweep
@@ -1145,7 +1539,7 @@ export class DioramaEngine {
           ? this.manualEclipseOffset
           : Math.sin(this.simTime * 0.36) * 14.5;
       this.uniforms.uUmbraOffset.value = offset;
-      for (const e of this.placedEntries) {
+      for (const e of [...this.placedEntries, ...this.festiveEntries]) {
         if (e.asset.pointLight) {
           const uProj = e.data.x * 0.8944 + e.data.z * 0.4472;
           const distU = Math.abs(uProj - offset);
@@ -1155,7 +1549,7 @@ export class DioramaEngine {
     }
 
     // Pop-in spring + windmills + animals + ducks
-    for (const e of this.placedEntries) {
+    for (const e of [...this.placedEntries, ...this.festiveEntries]) {
       if (e.popAnim < 1.0) {
         e.popAnim = Math.min(1.0, e.popAnim + dt * 4.5);
         const s = 1 - Math.pow(1 - e.popAnim, 3);
@@ -1231,7 +1625,9 @@ export class DioramaEngine {
             ? 0.45
             : 0.0;
 
-    this.pipeline.render(this.renderer, this.scene, this.camera, nightWarmth, (hide) => {
+    const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
+
+    this.pipeline.render(this.renderer, this.scene, this.camera, nightWarmth, isDarkSky, (hide) => {
       this.fxGroup.visible = !hide;
       this.ghostGroup.visible = !hide && this.toolMode === 'place' && this.hoverValid;
       for (const wm of this.waterMeshes) {

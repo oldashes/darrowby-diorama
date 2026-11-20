@@ -20,6 +20,9 @@ uniform sampler2D uNormalTex;
 uniform vec2 uTexelSize;
 uniform vec2 uPixelGrid;
 uniform float uPixelMode;
+uniform float uPocketMode;
+uniform vec2 uViewportCss;
+uniform float uDarkTheme;
 uniform float uInkStrength;
 uniform vec3 uInkColor;
 uniform float uNightWarmth;
@@ -52,20 +55,40 @@ vec3 aces(vec3 x) {
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+vec3 pocketPaperSrgb(vec2 uv) {
+  vec2 cssPos = uv * uViewportCss;
+  vec3 base = mix(vec3(0.949, 0.929, 0.878), vec3(0.118, 0.145, 0.204), uDarkTheme);
+  vec3 dotCol = mix(vec3(0.773, 0.737, 0.671), vec3(0.235, 0.282, 0.388), uDarkTheme);
+
+  vec2 cell = mod(cssPos, 24.0) - 12.0;
+  float dotMask = 1.0 - smoothstep(0.85, 1.45, length(cell));
+  vec3 col = mix(base, dotCol, dotMask * 0.55);
+
+  float grain = (fract(sin(dot(floor(cssPos), vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.016;
+  return clamp(col + grain, 0.0, 1.0);
+}
+
 void main() {
   vec3 col = texture2D(uColorTex, vUv).rgb;
-  vec2 eOff = uTexelSize * mix(1.75, 1.0, uPixelMode);
-  float dC = texture2D(uDepthTex, vUv).r;
-  float dL = texture2D(uDepthTex, vUv - vec2(eOff.x, 0.0)).r;
-  float dR = texture2D(uDepthTex, vUv + vec2(eOff.x, 0.0)).r;
-  float dU = texture2D(uDepthTex, vUv + vec2(0.0, eOff.y)).r;
-  float dD = texture2D(uDepthTex, vUv - vec2(0.0, eOff.y)).r;
+  vec2 wobble = uPocketMode > 0.5
+    ? vec2(sin(vUv.y * 210.0), cos(vUv.x * 210.0)) * uTexelSize * 0.35
+    : vec2(0.0);
+  vec2 sampleUv = vUv + wobble;
+  vec2 eOff = uPocketMode > 0.5
+    ? uTexelSize * 1.22
+    : uTexelSize * mix(1.75, 1.0, uPixelMode);
 
-  vec3 nC = texture2D(uNormalTex, vUv).rgb * 2.0 - 1.0;
-  vec3 nL = texture2D(uNormalTex, vUv - vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
-  vec3 nR = texture2D(uNormalTex, vUv + vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
-  vec3 nU = texture2D(uNormalTex, vUv + vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
-  vec3 nD = texture2D(uNormalTex, vUv - vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
+  float dC = texture2D(uDepthTex, vUv).r;
+  float dL = texture2D(uDepthTex, sampleUv - vec2(eOff.x, 0.0)).r;
+  float dR = texture2D(uDepthTex, sampleUv + vec2(eOff.x, 0.0)).r;
+  float dU = texture2D(uDepthTex, sampleUv + vec2(0.0, eOff.y)).r;
+  float dD = texture2D(uDepthTex, sampleUv - vec2(0.0, eOff.y)).r;
+
+  vec3 nC = texture2D(uNormalTex, sampleUv).rgb * 2.0 - 1.0;
+  vec3 nL = texture2D(uNormalTex, sampleUv - vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
+  vec3 nR = texture2D(uNormalTex, sampleUv + vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
+  vec3 nU = texture2D(uNormalTex, sampleUv + vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
+  vec3 nD = texture2D(uNormalTex, sampleUv - vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
 
   // Orthographic linear depth discontinuity for crisp silhouette ink
   float minD = min(min(dL, dR), min(dU, dD));
@@ -74,12 +97,19 @@ void main() {
   float isBg = step(0.9992, min(dC, minD));
   float depthEdge = smoothstep(0.0055, 0.016, depthDiff) * (1.0 - isBg);
 
+  if (uPocketMode > 0.5 && isBg > 0.5) {
+    vec3 paperSrgb = pocketPaperSrgb(vUv);
+    float paperVig = smoothstep(0.65, 1.32, length(vUv - 0.5) * 1.42) * 0.05;
+    gl_FragColor = vec4(paperSrgb * (1.0 - paperVig), 1.0);
+    return;
+  }
+
   // Clean interior normal crease detection (suppressed on sky/void and flat grass)
   float nDelta = max(length(nR - nL), length(nU - nD));
   float nearGeom = 1.0 - step(0.9985, dC);
   float normalEdge = smoothstep(0.56, 1.05, nDelta) * nearGeom;
 
-  float edge = clamp(max(depthEdge, normalEdge * 0.65), 0.0, 1.0) * uInkStrength;
+  float edge = clamp(max(depthEdge, normalEdge * (uPocketMode > 0.5 ? 0.58 : 0.65)), 0.0, 1.0) * uInkStrength;
 
   // Subtle sunlit storybook top-edge warm highlight on roof ridges and eaves
   float topCrease = clamp(nC.y - nD.y, 0.0, 1.0) * nearGeom;
@@ -93,6 +123,27 @@ void main() {
   vec3 avgBloom = (c1 + c2 + c3 + c4) * 0.25;
   float bright = max(dot(avgBloom, vec3(0.299, 0.587, 0.114)) - 0.85, 0.0);
   col += avgBloom * clamp(bright * 0.48, 0.0, 0.42);
+
+  if (uPocketMode > 0.5) {
+    // Replace exterior clear sky pixel adjacent to island boundary with paper tone to eliminate dark halo
+    if (dC >= 0.9992) {
+      vec3 extPaper = pocketPaperSrgb(vUv);
+      col = pow(extPaper, vec3(2.2));
+    }
+    vec3 geomCol = dC >= 0.9992 ? vec3(0.16, 0.13, 0.10) : col;
+    vec3 pocketInk = mix(geomCol * 0.24, vec3(0.032, 0.024, 0.020), 0.32);
+    col = mix(col, pocketInk, edge * 0.82);
+
+    vec3 srgb = pow(aces(col * 1.04), vec3(1.0 / 2.2));
+    srgb = mix(
+      srgb,
+      srgb * vec3(1.015, 1.00, 0.965) + vec3(0.022, 0.020, 0.014) * (1.0 - uDarkTheme),
+      0.55
+    );
+    float paperVig = smoothstep(0.65, 1.32, length(vUv - 0.5) * 1.42) * 0.05;
+    gl_FragColor = vec4(srgb * (1.0 - paperVig), 1.0);
+    return;
+  }
 
   // Apply crisp sepia-charcoal ink line
   col = mix(col, pow(uInkColor, vec3(2.2)), edge);
@@ -121,12 +172,14 @@ export class InkPipeline {
   private compositeMat: THREE.ShaderMaterial;
   private rtW = 0;
   private rtH = 0;
-  private curStyle: RenderStyleId = 'hd';
+  private curStyle: RenderStyleId = 'pocket';
 
   constructor() {
     this.depthTex = new THREE.DepthTexture(2, 2);
     this.depthTex.format = THREE.DepthFormat;
     this.depthTex.type = THREE.UnsignedIntType;
+    this.depthTex.minFilter = THREE.NearestFilter;
+    this.depthTex.magFilter = THREE.NearestFilter;
 
     this.colorRt = new THREE.WebGLRenderTarget(2, 2, {
       type: THREE.HalfFloatType,
@@ -155,7 +208,10 @@ export class InkPipeline {
         uTexelSize: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
         uPixelGrid: { value: new THREE.Vector2(640, 360) },
         uPixelMode: { value: 0 },
-        uInkStrength: { value: 0.72 },
+        uPocketMode: { value: 1 },
+        uViewportCss: { value: new THREE.Vector2(1280, 720) },
+        uDarkTheme: { value: 0 },
+        uInkStrength: { value: 0.78 },
         uInkColor: { value: new THREE.Color('#27201b') },
         uNightWarmth: { value: 0 },
       },
@@ -169,6 +225,8 @@ export class InkPipeline {
   }
 
   resize(cssWidth: number, cssHeight: number, dpr: number, style: RenderStyleId): void {
+    this.compositeMat.uniforms.uViewportCss.value.set(Math.max(2, cssWidth), Math.max(2, cssHeight));
+
     const w =
       style === 'pixel'
         ? Math.max(240, Math.round(cssWidth * 0.54))
@@ -192,8 +250,8 @@ export class InkPipeline {
       this.normalRt.texture.magFilter = filter;
       this.normalRt.texture.needsUpdate = true;
 
-      this.depthTex.minFilter = filter;
-      this.depthTex.magFilter = filter;
+      this.depthTex.minFilter = THREE.NearestFilter;
+      this.depthTex.magFilter = THREE.NearestFilter;
       this.depthTex.needsUpdate = true;
 
       this.colorRt.setSize(w, h);
@@ -202,7 +260,9 @@ export class InkPipeline {
       this.compositeMat.uniforms.uTexelSize.value.set(1 / w, 1 / h);
       this.compositeMat.uniforms.uPixelGrid.value.set(w, h);
       this.compositeMat.uniforms.uPixelMode.value = style === 'pixel' ? 1.0 : 0.0;
-      this.compositeMat.uniforms.uInkStrength.value = style === 'pixel' ? 0.85 : 0.68;
+      this.compositeMat.uniforms.uPocketMode.value = style === 'pocket' ? 1.0 : 0.0;
+      this.compositeMat.uniforms.uInkStrength.value =
+        style === 'pixel' ? 0.85 : style === 'pocket' ? 0.82 : 0.68;
     }
   }
 
@@ -211,9 +271,11 @@ export class InkPipeline {
     scene: THREE.Scene,
     camera: THREE.Camera,
     nightWarmth: number,
+    isDarkSky: boolean,
     toggleFxForNormals: (hidden: boolean) => void,
   ): void {
     this.compositeMat.uniforms.uNightWarmth.value = nightWarmth;
+    this.compositeMat.uniforms.uDarkTheme.value = isDarkSky ? 1.0 : 0.0;
 
     // Pass 1: Lit Storybook Color + DepthTexture
     renderer.setRenderTarget(this.colorRt);
@@ -232,7 +294,7 @@ export class InkPipeline {
     toggleFxForNormals(false);
     scene.background = prevBg;
 
-    // Pass 3: Ink Outlines + Pixel Dither/HD Tone Composite to Screen
+    // Pass 3: Ink Outlines + Pixel Dither / HD Tone / Pocket Paper Composite to Screen
     renderer.setRenderTarget(null);
     renderer.render(this.quadScene, this.quadCam);
   }
