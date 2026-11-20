@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Darrowby Diorama · 可造景 3D 地域微缩箱庭</title>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('clean') === '1') {
+          document.documentElement.classList.add('clean-mode');
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="gl-canvas"></canvas>
+
+      <div id="loading-badge" class="loading-badge">
+        <span class="dot"></span>
+        <span>正在加载 3D 建筑精模与绘本描边管线...</span>
+      </div>
+
+      <div class="hud-overlay">
+        <!-- Top Bar -->
+        <header class="hud-top">
+          <div class="location-card">
+            <div class="loc-header">
+              <span class="loc-dot"></span>
+              <strong id="loc-name">约克郡 · 达罗比</strong>
+              <span id="weather-pill" class="meta-pill">冬 · 微风</span>
+            </div>
+            <div id="loc-sub" class="loc-sub">54.30°N 2.00°W · Yorkshire Dales</div>
+            <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 输入经纬度</button>
+          </div>
+
+          <div class="top-controls">
+            <div class="pill-group" role="group" aria-label="描边风格">
+              <button class="style-btn active" data-style="pixel">👾 像素描边</button>
+              <button class="style-btn" data-style="hd">🎨 绘本描边</button>
+            </div>
+            <div class="pill-group">
+              <button id="btn-orbit-left" class="icon-btn" title="向左旋转 45°">↺</button>
+              <button id="btn-orbit-right" class="icon-btn" title="向右旋转 45°">↻</button>
+              <button id="btn-cam-reset" class="icon-btn" title="重置视角">🧭</button>
+            </div>
+          </div>
+        </header>
+
+        <!-- Bottom Floating Panels & Dock -->
+        <footer class="hud-bottom">
+          <!-- Set the Scene Popover (Quack-style) -->
+          <section id="scene-popover" class="glass-panel scene-popover hidden">
+            <div class="panel-head">
+              <span>☀️ 场景氛围调节（实时光照 / 四季 / 日食 / 风格）</span>
+              <button id="btn-close-scene" class="close-btn">✕</button>
+            </div>
+            <div class="scene-cols">
+              <div class="scene-col">
+                <div class="col-title">时段与天象</div>
+                <button class="opt-btn" data-time="morning">🌅 清晨微曦</button>
+                <button class="opt-btn active" data-time="day">☀️ 晴朗白昼</button>
+                <button class="opt-btn" data-time="sunset">🌇 暖金暮色</button>
+                <button class="opt-btn" data-time="night">🌙 星夜灯火</button>
+                <button class="opt-btn" data-time="eclipse">🌗 日食掠影</button>
+              </div>
+              <div class="scene-col">
+                <div class="col-title">四季地貌</div>
+                <button class="opt-btn" data-season="spring">🌸 春生嫩绿</button>
+                <button class="opt-btn" data-season="summer">🌻 盛夏芳草</button>
+                <button class="opt-btn" data-season="autumn">🍁 金秋落叶</button>
+                <button class="opt-btn active" data-season="winter">❄️ 冬雪冰柱</button>
+              </div>
+              <div class="scene-col">
+                <div class="col-title">气象动态</div>
+                <button class="opt-btn" data-weather="clear">🌤️ 晴空</button>
+                <button class="opt-btn active" data-weather="breeze">🍃 微风拂草</button>
+                <button class="opt-btn" data-weather="rain">🌧️ 细雨如丝</button>
+                <button class="opt-btn" data-weather="snow">🌨️ 瑞雪纷飞</button>
+                <button id="btn-sync-live" class="sync-btn">📡 同步当地实况</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Custom Builder / Props Tray -->
+          <section id="build-drawer" class="glass-panel build-drawer hidden">
+            <div class="build-toolbar">
+              <div class="cat-tabs">
+                <button class="cat-btn active" data-cat="building">🏠 建筑</button>
+                <button class="cat-btn" data-cat="nature">🌳 植被物料</button>
+                <button class="cat-btn" data-cat="living">🐑 动物</button>
+              </div>
+              <div class="build-actions">
+                <button id="btn-rotate-piece" class="act-btn" title="旋转 90° (R)">🔄 旋转</button>
+                <button id="btn-delete-mode" class="act-btn">🗑️ 拆除</button>
+                <button id="btn-undo-piece" class="act-btn">↩️ 撤销</button>
+                <button id="btn-reset-region" class="act-btn">🧹 复原</button>
+                <button id="btn-close-build" class="close-btn">✕</button>
+              </div>
+            </div>
+            <div id="catalog-strip" class="catalog-strip"></div>
+            <div id="build-hint" class="build-hint">点击地面格点摆放建筑，单指/左键按住拖拽可 360° 旋转岛屿</div>
+          </section>
+
+          <!-- Main Floating Bottom Dock -->
+          <div class="dock-bar">
+            <button id="btn-toggle-build" class="dock-btn">🛠️ 建造 / 物料</button>
+            <button id="btn-toggle-scene" class="dock-btn">☀️ 场景调节</button>
+            <div id="placed-count-pill" class="dock-count">共 29 处景物</div>
+          </div>
+        </footer>
+      </div>
+
+      <!-- Region & Custom Lat/Lon Modal -->
+      <div id="region-modal" class="modal-backdrop hidden">
+        <div class="glass-panel modal-card">
+          <div class="panel-head">
+            <span>🌍 选择预设地域，或输入任意经纬度生成风貌岛</span>
+            <button id="btn-close-regions" class="close-btn">✕</button>
+          </div>
+          <div class="preset-grid">
+            <button class="region-card active" data-region="darrowby">
+              <div class="rc-title">🇬🇧 约克郡 · 达罗比</div>
+              <div class="rc-desc">玻璃温室、石墙农舍、老风磨与牧场石桥（54.30°N, -2.00°E）</div>
+            </button>
+            <button class="region-card" data-region="wangshi">
+              <div class="rc-title">🇨🇳 湖北监利 · 网市镇</div>
+              <div class="rc-desc">白墙马头墙、红灯早茶摊、双拱桥与稻塘水乡（30.14°N, 113.09°E）</div>
+            </button>
+            <button class="region-card" data-region="otaru">
+              <div class="rc-title">🇯🇵 北海道 · 小樽运河</div>
+              <div class="rc-desc">砖石仓库群、煤气灯运河走廊、冬雪云杉与冰柱（43.19°N, 141.00°E）</div>
+            </button>
+          </div>
+
+          <div class="custom-coord-box">
+            <div class="col-title">自定义世界坐标（自动匹配气候带与 Open-Meteo 实时天气）</div>
+            <div class="coord-inputs">
+              <label>纬度 Lat <input id="input-lat" type="number" step="0.001" value="30.145" /></label>
+              <label>经度 Lon <input id="input-lon" type="number" step="0.001" value="113.088" /></label>
+              <button id="btn-apply-coord" class="primary-btn">✨ 生成并同步实时天气</button>
+            </div>
+            <div id="coord-status" class="coord-status">提示：支持全球任意经纬度（如故乡坐标 30.145, 113.088）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
