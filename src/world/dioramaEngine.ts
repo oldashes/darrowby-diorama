@@ -297,6 +297,68 @@ export function buildIslandGroundTexture(
       ctx.stroke();
       ctx.restore();
     }
+  } else if (region.waterLayout === 'harbour_bay') {
+    // Golden Sydney sandstone promenade & headland path
+    drawStoneRoad(
+      [
+        [-10.8, -3.2],
+        [-3.6, -2.8],
+        [1.8, -1.0],
+        [7.4, -2.0],
+      ],
+      1.75,
+    );
+    drawStoneRoad(
+      [
+        [-5.2, -2.8],
+        [-5.6, 5.2],
+      ],
+      1.35,
+    );
+
+    // Warm crescent sandy beach curve along SE cove
+    ctx.fillStyle = season === 'winter' ? '#dcd8cc' : '#ebd6a3';
+    ctx.beginPath();
+    ctx.moveTo(toPx(-4.0), toPx(11.2));
+    ctx.quadraticCurveTo(toPx(-3.4), toPx(1.7), toPx(2.8), toPx(1.25));
+    ctx.quadraticCurveTo(toPx(7.4), toPx(1.05), toPx(11.2), toPx(1.45));
+    ctx.lineTo(toPx(11.2), toPx(11.2));
+    ctx.closePath();
+    ctx.fill();
+
+    // Rich turquoise cove seabed (matches 3D water shape)
+    ctx.fillStyle = season === 'winter' ? '#a3bdc4' : '#3a98ad';
+    ctx.beginPath();
+    ctx.moveTo(toPx(-3.2), toPx(11.2));
+    ctx.quadraticCurveTo(toPx(-2.7), toPx(2.5), toPx(2.8), toPx(2.0));
+    ctx.quadraticCurveTo(toPx(7.2), toPx(1.8), toPx(11.2), toPx(2.1));
+    ctx.lineTo(toPx(11.2), toPx(11.2));
+    ctx.closePath();
+    ctx.fill();
+
+    // Scattered Jacaranda violet petals along Kirribilli avenue & lawns in spring/summer
+    if (season === 'summer' || season === 'spring') {
+      const petalSpots: Array<[number, number]> = [
+        [-8.4, -5.8],
+        [-3.8, -7.8],
+        [0.8, -4.4],
+        [-5.2, 1.4],
+        [7.6, -5.6],
+        [8.4, -0.6],
+      ];
+      for (const [jx, jz] of petalSpots) {
+        for (let p = 0; p < 24; p++) {
+          const ang = p * 2.39996;
+          const rad = 0.25 + ((p * 37) % 100) * 0.015;
+          const px = toPx(jx + Math.cos(ang) * rad);
+          const pz = toPx(jz + Math.sin(ang) * rad);
+          ctx.fillStyle = p % 2 === 0 ? 'rgba(154, 123, 224, 0.38)' : 'rgba(182, 152, 240, 0.34)';
+          ctx.beginPath();
+          ctx.arc(px, pz, 2.2 + (p % 3), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
   } else {
     // Otaru stone wharf quays flanking straight canal x=0
     ctx.fillStyle = season === 'winter' ? '#cbd0d4' : '#aeb3b8';
@@ -437,8 +499,8 @@ export class DioramaEngine {
   private pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.02);
 
   // Public reactive state
-  private region: RegionBlueprint = cloneBlueprint(PRESET_REGIONS.darrowby);
-  private season: SeasonId = 'winter';
+  private region: RegionBlueprint = cloneBlueprint(PRESET_REGIONS.sydney);
+  private season: SeasonId = 'summer';
   private timeMode: TimeMode = 'day';
   private weather: WeatherId = 'breeze';
   private renderStyle: RenderStyleId = 'pocket';
@@ -446,7 +508,7 @@ export class DioramaEngine {
   private cameraTween: { targetAz: number; targetPol: number; targetZoom: number } | null = null;
 
   private toolMode: BuildToolMode = 'view';
-  private selectedCatalogId = 'greenhouse';
+  private selectedCatalogId = 'jacaranda_tree';
   private previewRotY = 0;
   private hoverValid = false;
   private hoverPoint = new THREE.Vector3();
@@ -824,6 +886,65 @@ export class DioramaEngine {
           }
         });
       }
+    } else if (this.region.waterLayout === 'harbour_bay') {
+      // Smooth curved translucent 3D turquoise harbour cove
+      const bayShape = new THREE.Shape();
+      bayShape.moveTo(-3.2, -11.0);
+      bayShape.quadraticCurveTo(-2.7, -2.5, 2.8, -2.0);
+      bayShape.quadraticCurveTo(7.2, -1.8, 11.0, -2.1);
+      bayShape.lineTo(11.0, -11.0);
+      bayShape.closePath();
+      const bayGeo = new THREE.ShapeGeometry(bayShape);
+      bayGeo.rotateX(-Math.PI / 2);
+      const bayMesh = new THREE.Mesh(bayGeo, this.waterMat);
+      bayMesh.position.y = 0.02;
+      bayMesh.receiveShadow = true;
+      this.islandGroup.add(bayMesh);
+      this.waterMeshes.push(bayMesh);
+
+      // 3D wooden ferry pier / jetty extending into cove (x = -1.6, z = 1.8..6.4)
+      const deckMat = new THREE.MeshLambertMaterial({ color: '#9c7651', flatShading: true });
+      const pilingMat = new THREE.MeshLambertMaterial({ color: '#5b4432', flatShading: true });
+      const pierLampMat = new THREE.MeshLambertMaterial({ color: '#ffe594', flatShading: true });
+      attachStorybookSurfaceShader(deckMat, this.uniforms, { snowCap: true, isWindow: false });
+      attachStorybookSurfaceShader(pilingMat, this.uniforms, { snowCap: false, isWindow: false });
+      attachStorybookSurfaceShader(pierLampMat, this.uniforms, {
+        snowCap: false,
+        isWindow: false,
+        isLantern: true,
+      });
+
+      const beamGeo = new THREE.BoxGeometry(0.11, 0.08, 4.65);
+      for (const bx of [-1.96, -1.24]) {
+        const beam = new THREE.Mesh(beamGeo, pilingMat);
+        beam.position.set(bx, 0.09, 4.1);
+        beam.castShadow = true;
+        this.islandGroup.add(beam);
+      }
+
+      const plankGeo = new THREE.BoxGeometry(1.12, 0.06, 0.32);
+      for (let pz = 1.9; pz <= 6.35; pz += 0.39) {
+        const plank = new THREE.Mesh(plankGeo, deckMat);
+        plank.position.set(-1.6, 0.145, pz);
+        plank.castShadow = true;
+        plank.receiveShadow = true;
+        this.islandGroup.add(plank);
+      }
+
+      const pilingGeo = new THREE.CylinderGeometry(0.075, 0.085, 0.38, 6);
+      for (const pz of [2.4, 3.8, 5.1, 6.25]) {
+        for (const px of [-2.02, -1.18]) {
+          const post = new THREE.Mesh(pilingGeo, pilingMat);
+          post.position.set(px, 0.14, pz);
+          post.castShadow = true;
+          this.islandGroup.add(post);
+        }
+      }
+      const pierLamp = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.20, 0.14), pierLampMat);
+      pierLamp.position.set(-1.18, 0.42, 6.25);
+      this.islandGroup.add(pierLamp);
+
+      fallX = 3.8;
     } else {
       addWaterStrip(2.6, 22.0, 0, 0, 0);
       fallX = 0.0;
@@ -1005,7 +1126,7 @@ export class DioramaEngine {
         data: { ...p },
         asset,
         popAnim: 1.0,
-        baseY: p.catalogId === 'duck' || p.catalogId === 'lilypad' ? 0.02 : 0,
+        baseY: p.catalogId === 'duck' || p.catalogId === 'lilypad' || p.catalogId === 'sailboat' ? 0.025 : 0,
       });
 
       if (
@@ -1176,8 +1297,19 @@ export class DioramaEngine {
 
     // Weather visuals
     if (this.weatherPoints && this.weatherMat) {
-      const showPart = this.weather === 'snow' || this.weather === 'rain' || isWinter || this.season === 'autumn' || this.season === 'spring';
-      this.weatherPoints.visible = showPart && (this.weather !== 'clear' || this.season !== 'summer');
+      const isJacarandaBreeze =
+        this.region.id === 'sydney' &&
+        (this.season === 'summer' || this.season === 'spring') &&
+        this.weather === 'breeze';
+      const showPart =
+        this.weather === 'snow' ||
+        this.weather === 'rain' ||
+        isWinter ||
+        this.season === 'autumn' ||
+        this.season === 'spring' ||
+        isJacarandaBreeze;
+      this.weatherPoints.visible =
+        showPart && (this.weather !== 'clear' || this.season !== 'summer' || isJacarandaBreeze);
       if (this.weather === 'snow') {
         this.weatherMat.color.set('#ffffff');
         this.weatherMat.size = 0.19;
@@ -1186,6 +1318,10 @@ export class DioramaEngine {
         this.weatherMat.color.set('#a8d4eb');
         this.weatherMat.size = 0.14;
         this.weatherMat.opacity = 0.72;
+      } else if (isJacarandaBreeze) {
+        this.weatherMat.color.set('#bca0f5');
+        this.weatherMat.size = 0.16;
+        this.weatherMat.opacity = 0.8;
       } else if (this.season === 'autumn') {
         this.weatherMat.color.set('#e08a42');
         this.weatherMat.size = 0.16;
@@ -1320,7 +1456,7 @@ export class DioramaEngine {
           data: { ...ep },
           asset,
           popAnim: 0.05,
-          baseY: ep.catalogId === 'duck' || ep.catalogId === 'lilypad' ? 0.02 : 0,
+          baseY: ep.catalogId === 'duck' || ep.catalogId === 'lilypad' || ep.catalogId === 'sailboat' ? 0.025 : 0,
         });
       }
     }
@@ -1486,7 +1622,7 @@ export class DioramaEngine {
       data,
       asset,
       popAnim: 0.05,
-      baseY: catalogId === 'duck' || catalogId === 'lilypad' ? 0.02 : 0,
+      baseY: catalogId === 'duck' || catalogId === 'lilypad' || catalogId === 'sailboat' ? 0.025 : 0,
     });
     this.savePlacements();
     this.applyAtmosphere();

@@ -29,11 +29,11 @@
           <div class="location-card">
             <div class="loc-header">
               <span class="loc-dot"></span>
-              <strong id="loc-name">约克郡 · 达罗比</strong>
-              <span id="weather-pill" class="meta-pill">冬 · 微风</span>
+              <strong id="loc-name">悉尼 · 蓝花楹海湾</strong>
+              <span id="weather-pill" class="meta-pill">夏 · 微风</span>
             </div>
-            <div id="loc-sub" class="loc-sub">54.30°N 2.00°W · Yorkshire Dales</div>
-            <div id="field-note" class="field-note">北约克荒原冬季寒风凛冽，玻璃温室透出暖灯，石崖悬冰成帘。</div>
+            <div id="loc-sub" class="loc-sub">33.85°S 151.22°E · Sydney Kirribilli Cove</div>
+            <div id="field-note" class="field-note">11 月底北半球入冬时悉尼正值蓝花楹初夏巅峰：紫色花云缀满岸坡，海港白帆点点。</div>
             <div id="legend-row" class="legend-row"></div>
             <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
@@ -72,9 +72,9 @@
               <div class="scene-col">
                 <div class="col-title">四季地貌</div>
                 <button class="opt-btn" data-season="spring">🌸 春生嫩绿</button>
-                <button class="opt-btn" data-season="summer">🌻 盛夏芳草</button>
+                <button class="opt-btn active" data-season="summer">🌻 盛夏芳草</button>
                 <button class="opt-btn" data-season="autumn">🍁 金秋落叶</button>
-                <button class="opt-btn active" data-season="winter">❄️ 冬雪冰柱</button>
+                <button class="opt-btn" data-season="winter">❄️ 冬雪冰柱</button>
               </div>
               <div class="scene-col">
                 <div class="col-title">气象动态</div>
@@ -123,7 +123,7 @@
           <div class="dock-bar">
             <button id="btn-toggle-build" class="dock-btn">🛠️ 建造 / 物料</button>
             <button id="btn-toggle-scene" class="dock-btn">☀️ 场景调节</button>
-            <div id="placed-count-pill" class="dock-count">共 29 处景物</div>
+            <div id="placed-count-pill" class="dock-count">共 30 处可改建</div>
           </div>
         </footer>
       </div>
@@ -136,7 +136,11 @@
             <button id="btn-close-regions" class="close-btn">✕</button>
           </div>
           <div class="preset-grid">
-            <button class="region-card active" data-region="darrowby">
+            <button class="region-card active" data-region="sydney">
+              <div class="rc-title">🇦🇺 悉尼 · 蓝花楹海湾</div>
+              <div class="rc-desc">南半球仲夏盛放蓝花楹大道、白色歌剧帆影、红白灯塔与木栈道帆船（33.85°S, 151.22°E）</div>
+            </button>
+            <button class="region-card" data-region="darrowby">
               <div class="rc-title">🇬🇧 约克郡 · 达罗比</div>
               <div class="rc-desc">玻璃温室、石墙农舍、老风磨与牧场石桥（54.30°N, -2.00°E）</div>
             </button>

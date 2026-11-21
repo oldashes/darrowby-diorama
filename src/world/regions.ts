@@ -1,11 +1,11 @@
 import { OsmFootprint, OsmSceneData } from './osmFetcher';
 
-export type RegionId = 'darrowby' | 'wangshi' | 'otaru' | 'custom';
+export type RegionId = 'sydney' | 'darrowby' | 'wangshi' | 'otaru' | 'custom';
 export type SeasonId = 'spring' | 'summer' | 'autumn' | 'winter';
 export type TimeMode = 'morning' | 'day' | 'sunset' | 'night' | 'eclipse';
 export type WeatherId = 'clear' | 'breeze' | 'rain' | 'snow';
 export type RenderStyleId = 'pocket' | 'pixel' | 'hd';
-export type WaterLayoutId = 'brook_pond' | 'canal_pond' | 'snow_canal' | 'osm_custom';
+export type WaterLayoutId = 'brook_pond' | 'canal_pond' | 'snow_canal' | 'harbour_bay' | 'osm_custom';
 export type CameraPresetId = 'cinematic' | 'closeup' | 'street' | 'bird';
 
 export interface PlacedItemData {
@@ -94,6 +94,104 @@ export const SHARED_STORYBOOK_PALETTE: PaletteOverrides = {
 };
 
 export const PRESET_REGIONS: Record<Exclude<RegionId, 'custom'>, RegionBlueprint> = {
+  sydney: {
+    id: 'sydney',
+    name: '悉尼 · 蓝花楹海湾',
+    badgeText: '33.85°S 151.22°E · Sydney Kirribilli Cove',
+    subtitle: '南半球仲夏晴空、盛放蓝花楹大道、白色歌剧帆影与红白海角灯塔',
+    lat: -33.847,
+    lon: 151.2155,
+    defaultSeason: 'summer',
+    defaultWeather: 'breeze',
+    defaultTime: 'day',
+    waterLayout: 'harbour_bay',
+    hasPaddies: false,
+    palette: {
+      ...SHARED_STORYBOOK_PALETTE,
+      grassSpring: '#9ac474',
+      grassSummer: '#8db867',
+      grassAutumn: '#c2a55f',
+      grassWinter: '#ebe7dc',
+      dirtPath: '#e5d0a8',
+      waterTop: '#4bbbd0',
+      iceTop: '#b7dce8',
+      cliffRock: '#b6976c',
+      cliffSoil: '#8c6b49',
+      roofTone: '#c26952',
+      wallTone: '#efe6d5',
+      carStyle: 'cream',
+    },
+    fieldNotes: {
+      spring: '十月底南半球迎春暖意渐浓，基里比利港畔花苞初绽，木栈道海风清新。',
+      summer: '11 月底北半球入冬时悉尼正值蓝花楹初夏巅峰：紫色花云缀满岸坡，海港白帆点点。',
+      autumn: '四月澳大利亚深秋高爽湛蓝，海角灯塔与沙岸步道沐浴在柔金日照里。',
+      winter: '七月悉尼港冬日仍温和明媚，常青绿坡伴着海湾潮汐安静栖泊帆船。',
+    },
+    specialScenes: [
+      {
+        id: 'jacaranda_bloom',
+        icon: '💜',
+        label: '蓝花楹盛放季',
+        season: 'summer',
+        timeMode: 'day',
+        weather: 'breeze',
+        note: '基里比利蓝花楹盛放季：紫色花雨漫过沿岸长椅与木栈道，白帆贴着碧湾顺风巡游。',
+        extraPlacements: [
+          { id: 'sp_sy_j1', catalogId: 'jacaranda_tree', x: -3.2, z: 3.4, rotY: 0.7 },
+          { id: 'sp_sy_j2', catalogId: 'jacaranda_tree', x: 3.2, z: -5.4, rotY: 1.9 },
+          { id: 'sp_sy_sb1', catalogId: 'sailboat', x: 0.8, z: 7.4, rotY: 0.35 },
+          { id: 'sp_sy_bn', catalogId: 'bench', x: -3.6, z: 1.8, rotY: 0.9 },
+        ],
+      },
+      {
+        id: 'harbour_summer_night',
+        icon: '🎆',
+        label: '仲夏海港之夜',
+        season: 'summer',
+        timeMode: 'night',
+        weather: 'clear',
+        note: '仲夏海港之夜：夜色蓝图映亮白色歌剧帆壳与红白灯塔塔顶灯光，游船静泊码头。',
+        extraPlacements: [
+          { id: 'sp_sy_l1', catalogId: 'lantern', x: -1.6, z: 2.2, rotY: 0 },
+          { id: 'sp_sy_l2', catalogId: 'lantern', x: 2.8, z: -0.6, rotY: 0 },
+          { id: 'sp_sy_sb2', catalogId: 'sailboat', x: 1.4, z: 4.4, rotY: -0.5 },
+        ],
+      },
+    ],
+    placements: [
+      { id: 'sy_sails', catalogId: 'harbour_sails', x: 4.8, z: -2.2, rotY: -0.42 },
+      { id: 'sy_lh', catalogId: 'coastal_lighthouse', x: -7.6, z: 6.4, rotY: 0.3 },
+      { id: 'sy_inn', catalogId: 'inn', x: -5.8, z: -5.8, rotY: 0.25 },
+      { id: 'sy_h1', catalogId: 'house_1', x: -1.4, z: -6.2, rotY: 0.1 },
+      { id: 'sy_h2', catalogId: 'house_2', x: 2.2, z: -6.6, rotY: -0.2 },
+      { id: 'sy_cafe', catalogId: 'tea_stall', x: -2.8, z: -0.2, rotY: 0.05 },
+      { id: 'sy_gh', catalogId: 'greenhouse', x: -7.6, z: -1.6, rotY: 1.57 },
+      { id: 'sy_j1', catalogId: 'jacaranda_tree', x: -8.4, z: -5.8, rotY: 0.4 },
+      { id: 'sy_j2', catalogId: 'jacaranda_tree', x: -3.8, z: -7.8, rotY: 1.2 },
+      { id: 'sy_j3', catalogId: 'jacaranda_tree', x: 0.8, z: -4.4, rotY: 2.1 },
+      { id: 'sy_j4', catalogId: 'jacaranda_tree', x: -5.2, z: 1.4, rotY: 0.9 },
+      { id: 'sy_j5', catalogId: 'jacaranda_tree', x: 7.6, z: -5.6, rotY: 1.6 },
+      { id: 'sy_j6', catalogId: 'jacaranda_tree', x: 8.4, z: -0.6, rotY: 2.8 },
+      { id: 'sy_tc', catalogId: 'tree_common', x: 5.4, z: -8.2, rotY: 0.8 },
+      { id: 'sy_tb', catalogId: 'tree_birch', x: -8.8, z: 2.2, rotY: 1.4 },
+      { id: 'sy_sb1', catalogId: 'sailboat', x: 2.4, z: 6.2, rotY: 0.5 },
+      { id: 'sy_sb2', catalogId: 'sailboat', x: 6.8, z: 5.6, rotY: -0.8 },
+      { id: 'sy_sb3', catalogId: 'sailboat', x: 5.4, z: 8.6, rotY: 1.1 },
+      { id: 'sy_dk1', catalogId: 'duck', x: 8.0, z: 3.2, rotY: 0.6 },
+      { id: 'sy_dk2', catalogId: 'duck', x: 7.0, z: 3.8, rotY: -0.9 },
+      { id: 'sy_car', catalogId: 'sedan', x: -4.2, z: -2.4, rotY: 0.12 },
+      { id: 'sy_bn1', catalogId: 'bench', x: -0.2, z: 0.9, rotY: 0.15 },
+      { id: 'sy_bn2', catalogId: 'bench', x: -5.2, z: 4.6, rotY: 1.4 },
+      { id: 'sy_l1', catalogId: 'lantern', x: -3.8, z: 1.0, rotY: 0 },
+      { id: 'sy_l2', catalogId: 'lantern', x: 1.2, z: 0.8, rotY: 0 },
+      { id: 'sy_l3', catalogId: 'lantern', x: -5.8, z: 3.6, rotY: 0 },
+      { id: 'sy_l4', catalogId: 'lantern', x: 5.8, z: 0.6, rotY: 0 },
+      { id: 'sy_rk', catalogId: 'rock_moss', x: -8.8, z: 8.0, rotY: 0.5 },
+      { id: 'sy_dog', catalogId: 'shiba', x: -3.4, z: -0.8, rotY: 0.6 },
+      { id: 'sy_alp', catalogId: 'alpaca', x: -6.6, z: -3.4, rotY: -0.5 },
+    ],
+  },
+
   darrowby: {
     id: 'darrowby',
     name: '约克郡 · 达罗比',

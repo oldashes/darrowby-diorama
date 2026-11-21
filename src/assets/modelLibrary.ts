@@ -32,12 +32,16 @@ export const CATALOG: CatalogItem[] = [
   { id: 'wangshi_house', label: '马头墙屋', category: 'building', icon: '🏮', defaultScaleHeight: 2.25, kind: 'bespoke' },
   { id: 'tea_stall', label: '红灯茶摊', category: 'building', icon: '🍵', defaultScaleHeight: 1.75, kind: 'bespoke' },
   { id: 'bridge_stone', label: '石拱小桥', category: 'building', icon: '🌉', defaultScaleHeight: 1.05, kind: 'bespoke' },
+  { id: 'harbour_sails', label: '悉尼帆影馆', category: 'building', icon: '⛵', defaultScaleHeight: 2.55, kind: 'bespoke' },
+  { id: 'coastal_lighthouse', label: '红白灯塔', category: 'building', icon: '🗼', defaultScaleHeight: 2.85, kind: 'bespoke' },
   { id: 'well', label: '古石水井', category: 'building', icon: '🪣', defaultScaleHeight: 1.45, kind: 'glb', glbKey: 'well' },
 
+  { id: 'jacaranda_tree', label: '蓝花楹树', category: 'nature', icon: '💜', defaultScaleHeight: 2.65, kind: 'bespoke' },
   { id: 'tree_common', label: '落叶乔木', category: 'nature', icon: '🌳', defaultScaleHeight: 2.7, kind: 'glb', glbKey: 'tree_common' },
   { id: 'tree_birch', label: '白桦树', category: 'nature', icon: '🌲', defaultScaleHeight: 2.8, kind: 'glb', glbKey: 'tree_birch' },
   { id: 'tree_willow', label: '水岸垂柳', category: 'nature', icon: '🪴', defaultScaleHeight: 2.6, kind: 'glb', glbKey: 'tree_willow' },
   { id: 'tree_pine', label: '高山云杉', category: 'nature', icon: '🎄', defaultScaleHeight: 2.9, kind: 'glb', glbKey: 'tree_pine' },
+  { id: 'sailboat', label: '海湾帆船', category: 'nature', icon: '🛥️', defaultScaleHeight: 1.55, kind: 'bespoke' },
   { id: 'lantern', label: '铸铁街灯', category: 'nature', icon: '💡', defaultScaleHeight: 1.25, kind: 'glb', glbKey: 'lantern' },
   { id: 'bench', label: '木制长椅', category: 'nature', icon: '🪑', defaultScaleHeight: 0.58, kind: 'glb', glbKey: 'bench' },
   { id: 'beehive', label: '养蜂木箱', category: 'nature', icon: '🍯', defaultScaleHeight: 0.72, kind: 'bespoke' },
@@ -496,7 +500,7 @@ export class ModelLibrary {
   private createBespoke(
     id: string,
     region: RegionBlueprint,
-    _season: SeasonId,
+    season: SeasonId,
     uniforms: WorldShaderUniforms,
     targetHeight: number,
   ): InstantiatedAsset {
@@ -696,6 +700,233 @@ export class ModelLibrary {
       addBox(raw, 0.24, 0.10, 0.18, 0, 0.11, -0.02, wing);
       addBox(raw, 0.13, 0.13, 0.13, 0, 0.22, 0.12, body);
       addBox(raw, 0.08, 0.05, 0.10, 0, 0.20, 0.22, beak);
+      duckPhase = Math.random() * Math.PI * 2;
+    } else if (id === 'harbour_sails') {
+      const podium = mkMat('#decba8', { snowCap: true });
+      const plinthDark = mkMat('#bba684', { snowCap: false });
+      const shell = mkMat('#f7f4eb', { snowCap: true });
+      const rib = mkMat('#dcd3c0', { snowCap: false });
+      const atriumGlass = mkMat('#264354', { snowCap: false, isWindow: true });
+
+      // Two-tier warm Sydney sandstone podium
+      addBox(raw, 3.2, 0.22, 2.35, 0, 0.11, 0, plinthDark);
+      addBox(raw, 2.85, 0.16, 2.02, 0, 0.30, 0, podium);
+      addBox(raw, 2.4, 0.08, 0.34, 0, 0.20, 1.18, podium);
+
+      // Sculptural overlapping white sail shells + recessed teal glass mouth
+      const addSailVault = (sx: number, sy: number, sz: number, scale: number, yaw: number, tiltX: number) => {
+        const sailGrp = new THREE.Group();
+        sailGrp.position.set(sx, sy, sz);
+        sailGrp.rotation.y = yaw;
+
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(0.68 * scale, 1.52 * scale, 5),
+          shell,
+        );
+        cone.scale.set(0.72, 1.0, 1.08);
+        cone.position.set(0, 0.72 * scale, -0.04 * scale);
+        cone.rotation.x = tiltX;
+        cone.castShadow = true;
+        cone.receiveShadow = true;
+        sailGrp.add(cone);
+
+        const baseSkirt = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.56 * scale, 0.66 * scale, 0.34 * scale, 5),
+          rib,
+        );
+        baseSkirt.scale.set(0.72, 1.0, 1.06);
+        baseSkirt.position.set(0, 0.16 * scale, -0.02 * scale);
+        baseSkirt.castShadow = true;
+        baseSkirt.receiveShadow = true;
+        sailGrp.add(baseSkirt);
+
+        const glassPanel = new THREE.Mesh(
+          new THREE.ConeGeometry(0.46 * scale, 0.92 * scale, 3),
+          atriumGlass,
+        );
+        glassPanel.scale.set(0.85, 1.0, 0.4);
+        glassPanel.position.set(0, 0.48 * scale, 0.28 * scale);
+        glassPanel.rotation.x = tiltX * 0.5;
+        sailGrp.add(glassPanel);
+
+        raw.add(sailGrp);
+      };
+
+      addSailVault(-0.62, 0.38, -0.14, 0.98, 0.18, 0.34);
+      addSailVault(0.06, 0.38, 0.04, 1.24, -0.08, 0.30);
+      addSailVault(0.72, 0.38, 0.16, 0.88, -0.45, -0.28);
+      addSailVault(-0.22, 0.38, 0.54, 0.72, 0.25, 0.36);
+
+      pointLight = new THREE.PointLight('#ffd284', 0, 5.2, 1.6);
+      pointLight.position.set(0.06, 1.15, 0.55);
+      raw.add(pointLight);
+    } else if (id === 'coastal_lighthouse') {
+      const stone = mkMat('#cfc2a7', { snowCap: true });
+      const redStripe = mkMat('#cb4a3d', { snowCap: false });
+      const whiteStripe = mkMat('#f6f2e8', { snowCap: true });
+      const iron = mkMat('#343a44', { snowCap: false });
+      const lantern = mkMat('#ffe894', { snowCap: false, isLantern: true });
+      const cottageRoof = mkMat('#c26952', { snowCap: true });
+      const winMat = mkMat('#2d3a49', { snowCap: false, isWindow: true });
+
+      // Sandstone plinth + small keeper's cottage annex
+      addBox(raw, 1.32, 0.24, 1.16, 0.08, 0.12, 0, stone);
+      addBox(raw, 0.62, 0.52, 0.58, 0.56, 0.48, 0, whiteStripe);
+      addBox(raw, 0.68, 0.12, 0.64, 0.56, 0.80, 0, cottageRoof, 0.18);
+      addBox(raw, 0.22, 0.20, 0.05, 0.56, 0.50, 0.30, winMat);
+
+      // Hornby-style alternating red & white horizontal striped tower
+      const rings: Array<{ rBot: number; rTop: number; h: number; y: number; red: boolean }> = [
+        { rBot: 0.38, rTop: 0.35, h: 0.36, y: 0.42, red: true },
+        { rBot: 0.35, rTop: 0.32, h: 0.36, y: 0.78, red: false },
+        { rBot: 0.32, rTop: 0.29, h: 0.36, y: 1.14, red: true },
+        { rBot: 0.29, rTop: 0.26, h: 0.36, y: 1.50, red: false },
+        { rBot: 0.26, rTop: 0.24, h: 0.32, y: 1.84, red: true },
+      ];
+      for (const rg of rings) {
+        const cyl = new THREE.Mesh(
+          new THREE.CylinderGeometry(rg.rTop, rg.rBot, rg.h, 12),
+          rg.red ? redStripe : whiteStripe,
+        );
+        cyl.position.set(-0.18, rg.y, 0);
+        cyl.castShadow = true;
+        cyl.receiveShadow = true;
+        raw.add(cyl);
+      }
+
+      // Iron gallery + glowing lantern glass drum + red dome cupola
+      const deck = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.32, 0.08, 12), iron);
+      deck.position.set(-0.18, 2.04, 0);
+      deck.castShadow = true;
+      raw.add(deck);
+
+      const glassDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.20, 0.28, 10), lantern);
+      glassDrum.position.set(-0.18, 2.22, 0);
+      raw.add(glassDrum);
+
+      const dome = new THREE.Mesh(new THREE.ConeGeometry(0.27, 0.28, 10), redStripe);
+      dome.position.set(-0.18, 2.48, 0);
+      dome.castShadow = true;
+      raw.add(dome);
+
+      pointLight = new THREE.PointLight('#ffd87a', 0, 5.5, 1.5);
+      pointLight.position.set(-0.18, 2.24, 0);
+      raw.add(pointLight);
+    } else if (id === 'jacaranda_tree') {
+      const bark = mkMat('#6c5c4f', { snowCap: false });
+      const petalMat = mkMat('#b99ced', { snowCap: false });
+
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 1.05, 7), bark);
+      trunk.position.set(0, 0.52, 0);
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      raw.add(trunk);
+
+      for (let i = 0; i < 3; i++) {
+        const ang = (i * Math.PI * 2) / 3 + 0.3;
+        const br = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.075, 0.85, 6), bark);
+        br.position.set(Math.cos(ang) * 0.22, 1.15, Math.sin(ang) * 0.22);
+        br.rotation.z = -Math.cos(ang) * 0.52;
+        br.rotation.x = Math.sin(ang) * 0.52;
+        br.castShadow = true;
+        raw.add(br);
+      }
+
+      if (season === 'winter') {
+        const frost = mkMat('#d9d4cb', { snowCap: true });
+        for (const [cx, cy, cz, r] of [
+          [0, 1.72, 0, 0.42],
+          [-0.42, 1.52, 0.25, 0.34],
+          [0.44, 1.56, -0.22, 0.32],
+        ] as Array<[number, number, number, number]>) {
+          const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), frost);
+          puff.scale.set(1.1, 0.72, 1.1);
+          puff.position.set(cx, cy, cz);
+          puff.castShadow = true;
+          raw.add(puff);
+        }
+      } else {
+        const shades =
+          season === 'autumn'
+            ? ['#8c7a62', '#9a7ea6', '#7a825b']
+            : ['#8e6cd6', '#a98ae8', '#7655bf', '#c0a7f5'];
+        const puffMats = shades.map((h) => mkMat(h, { snowCap: false }));
+        const clusters: Array<[number, number, number, number]> = [
+          [0, 1.88, 0, 0.68],
+          [-0.56, 1.62, 0.32, 0.52],
+          [0.54, 1.66, -0.28, 0.50],
+          [0.24, 1.58, 0.54, 0.48],
+          [-0.36, 1.60, -0.48, 0.46],
+          [0.05, 2.22, -0.05, 0.46],
+        ];
+        clusters.forEach(([cx, cy, cz, r], idx) => {
+          const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), puffMats[idx % puffMats.length]);
+          puff.scale.set(1.18, 0.74, 1.12);
+          puff.position.set(cx, cy, cz);
+          puff.castShadow = true;
+          puff.receiveShadow = true;
+          raw.add(puff);
+        });
+
+        // Scattered blossom petals around base
+        if (season === 'summer' || season === 'spring') {
+          const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.72, 0.02, 12), petalMat);
+          ring.position.set(0, 0.015, 0);
+          raw.add(ring);
+        }
+      }
+    } else if (id === 'sailboat') {
+      const hull = mkMat('#f7f4ec', { snowCap: false });
+      const stripe = mkMat('#2c5878', { snowCap: false });
+      const deck = mkMat('#8f6443', { snowCap: false });
+      const sail = mkMat('#fbfaf6', { snowCap: false });
+      const mastMat = mkMat('#6d5846', { snowCap: false });
+      const pennant = mkMat('#d95745', { snowCap: false });
+
+      // Sleek stepped harbour hull + bow + teak deck
+      addBox(raw, 0.44, 0.16, 1.05, 0, 0.10, 0.05, hull);
+      addBox(raw, 0.46, 0.05, 1.08, 0, 0.06, 0.05, stripe);
+      addBox(raw, 0.34, 0.06, 0.85, 0, 0.20, 0.04, deck);
+      const bow = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.42, 4), hull);
+      bow.rotation.x = -Math.PI * 0.5;
+      bow.rotation.z = Math.PI * 0.25;
+      bow.scale.set(0.95, 1.0, 0.65);
+      bow.position.set(0, 0.11, -0.64);
+      bow.castShadow = true;
+      raw.add(bow);
+
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.028, 1.32, 6), mastMat);
+      mast.position.set(0, 0.84, -0.04);
+      mast.castShadow = true;
+      raw.add(mast);
+
+      // Triangular extruded mainsail
+      const mainShape = new THREE.Shape();
+      mainShape.moveTo(0, 0);
+      mainShape.lineTo(0.56, 0);
+      mainShape.lineTo(0, 1.04);
+      mainShape.closePath();
+      const mainGeo = new THREE.ExtrudeGeometry(mainShape, { depth: 0.03, bevelEnabled: false });
+      mainGeo.rotateY(-Math.PI * 0.5);
+      const mainMesh = new THREE.Mesh(mainGeo, sail);
+      mainMesh.position.set(0.015, 0.34, -0.02);
+      mainMesh.castShadow = true;
+      raw.add(mainMesh);
+
+      // Triangular jib sail
+      const jibShape = new THREE.Shape();
+      jibShape.moveTo(0, 0);
+      jibShape.lineTo(0.36, 0);
+      jibShape.lineTo(0, 0.78);
+      jibShape.closePath();
+      const jibGeo = new THREE.ExtrudeGeometry(jibShape, { depth: 0.025, bevelEnabled: false });
+      jibGeo.rotateY(Math.PI * 0.5);
+      const jibMesh = new THREE.Mesh(jibGeo, sail);
+      jibMesh.position.set(-0.012, 0.34, -0.08);
+      jibMesh.castShadow = true;
+      raw.add(jibMesh);
+
+      addBox(raw, 0.02, 0.07, 0.18, 0, 1.46, 0.08, pennant);
       duckPhase = Math.random() * Math.PI * 2;
     }
 
