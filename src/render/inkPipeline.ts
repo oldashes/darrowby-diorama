@@ -28,6 +28,17 @@ uniform vec3 uInkColor;
 uniform vec3 uSkyTop;
 uniform vec3 uSkyBot;
 uniform float uNightWarmth;
+uniform float uPerspectiveMode;
+uniform vec2 uCamNearFar;
+
+float linearizeDepth(float d) {
+  if (uPerspectiveMode < 0.5) return d;
+  float zNdc = d * 2.0 - 1.0;
+  float n = uCamNearFar.x;
+  float f = uCamNearFar.y;
+  float lin = (2.0 * n * f) / max(0.0001, (f + n - zNdc * (f - n)));
+  return clamp((lin - n) / max(0.0001, (f - n)), 0.0, 1.0);
+}
 
 float bayer4(vec2 p) {
   vec2 c = floor(mod(p, 4.0));
@@ -98,18 +109,27 @@ void main() {
   float dU = texture2D(uDepthTex, sampleUv + vec2(0.0, eOff.y)).r;
   float dD = texture2D(uDepthTex, sampleUv - vec2(0.0, eOff.y)).r;
 
+  float ldL = linearizeDepth(dL);
+  float ldR = linearizeDepth(dR);
+  float ldU = linearizeDepth(dU);
+  float ldD = linearizeDepth(dD);
+
   vec3 nC = texture2D(uNormalTex, sampleUv).rgb * 2.0 - 1.0;
   vec3 nL = texture2D(uNormalTex, sampleUv - vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
   vec3 nR = texture2D(uNormalTex, sampleUv + vec2(eOff.x, 0.0)).rgb * 2.0 - 1.0;
   vec3 nU = texture2D(uNormalTex, sampleUv + vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
   vec3 nD = texture2D(uNormalTex, sampleUv - vec2(0.0, eOff.y)).rgb * 2.0 - 1.0;
 
-  // Orthographic linear depth discontinuity for crisp silhouette ink
+  // Depth discontinuity for crisp silhouette ink (orthographic raw or linearized perspective)
   float minD = min(min(dL, dR), min(dU, dD));
-  float maxD = max(max(dL, dR), max(dU, dD));
-  float depthDiff = maxD - minD;
-  float isBg = step(0.9992, min(dC, minD));
-  float depthEdge = smoothstep(0.0055, 0.016, depthDiff) * (1.0 - isBg);
+  float minLD = min(min(ldL, ldR), min(ldU, ldD));
+  float maxLD = max(max(ldL, ldR), max(ldU, ldD));
+  float depthDiff = maxLD - minLD;
+  float bgCutoff = uPerspectiveMode > 0.5 ? 0.99992 : 0.9992;
+  float isBg = step(bgCutoff, min(dC, minD));
+  float depthEdge = uPerspectiveMode > 0.5
+    ? smoothstep(0.0038, 0.015, depthDiff) * (1.0 - isBg)
+    : smoothstep(0.0055, 0.016, depthDiff) * (1.0 - isBg);
 
   if (isPocket && isBg > 0.5) {
     vec3 paperSrgb = pocketPaperSrgb(vUv);
@@ -127,7 +147,7 @@ void main() {
 
   // Interior normal crease detection
   float nDelta = max(length(nR - nL), length(nU - nD));
-  float nearGeom = 1.0 - step(0.9985, dC);
+  float nearGeom = 1.0 - step(bgCutoff, dC);
   float normalWeight = isPocket ? 0.62 : isHd ? 0.78 : 0.68;
   float normalEdge = smoothstep(0.54, 1.02, nDelta) * nearGeom;
   float edge = clamp(max(depthEdge, normalEdge * normalWeight), 0.0, 1.0) * uInkStrength;
@@ -152,7 +172,7 @@ void main() {
   col += avgBloom * bloomAmt;
 
   if (isPocket) {
-    if (dC >= 0.9992) {
+    if (dC >= bgCutoff) {
       vec3 extPaper = pocketPaperSrgb(vUv);
       col = pow(extPaper, vec3(2.2));
     }
@@ -160,7 +180,7 @@ void main() {
     vec3 srgb = pow(aces(col * 1.02), vec3(1.0 / 2.2));
     vec2 cssPos = vUv * uViewportCss;
 
-    if (dC < 0.9992) {
+    if (dC < bgCutoff) {
       // 1. Flat architectural watercolor wash (5-stop soft luminance quantization + matte desaturation)
       float luma = dot(srgb, vec3(0.299, 0.587, 0.114));
       float qLuma = floor(luma * 5.0 + 0.5) / 5.0;
@@ -185,7 +205,7 @@ void main() {
     }
 
     // 5. Hue-tinted fine technical fountain pen ink (lineOf equivalent)
-    vec3 pocketInk = dC >= 0.9992
+    vec3 pocketInk = dC >= bgCutoff
       ? vec3(0.18, 0.15, 0.13)
       : mix(srgb * 0.22, vec3(0.14, 0.12, 0.10), 0.42);
     srgb = mix(srgb, pocketInk, edge * 0.88);
@@ -196,14 +216,14 @@ void main() {
   }
 
   if (isHd) {
-    if (dC >= 0.9992) {
+    if (dC >= bgCutoff) {
       col = hdSkyLinear(vUv);
     }
     vec3 brushInk = pow(vec3(0.176, 0.114, 0.078), vec3(2.2)); // warm walnut-sepia storybook brush #2d1d14
     col = mix(col, brushInk, edge * 0.92);
 
     vec3 srgb = pow(aces(col * 1.08), vec3(1.0 / 2.2));
-    if (dC < 0.9992) {
+    if (dC < bgCutoff) {
       float luma = dot(srgb, vec3(0.299, 0.587, 0.114));
       srgb = clamp(mix(vec3(luma), srgb, 1.24), 0.0, 1.0);
       srgb *= mix(vec3(1.04, 1.01, 0.96), vec3(1.0), uDarkTheme);
@@ -218,7 +238,7 @@ void main() {
   float b = (bayer4(vUv * uPixelGrid) - 0.5) * 0.024;
   col = max(col + b, vec3(0.0));
   vec3 srgb = pow(aces(col * 1.05), vec3(1.0 / 2.2));
-  if (dC < 0.9992) {
+  if (dC < bgCutoff) {
     vec3 quant = floor(srgb * 26.0 + 0.5) / 26.0;
     srgb = mix(srgb, quant, 0.45);
   }
@@ -281,6 +301,8 @@ export class InkPipeline {
         uSkyTop: { value: new THREE.Color('#47688a') },
         uSkyBot: { value: new THREE.Color('#a8c2d4') },
         uNightWarmth: { value: 0 },
+        uPerspectiveMode: { value: 0.0 },
+        uCamNearFar: { value: new THREE.Vector2(0.5, 120.0) },
       },
       depthTest: false,
       depthWrite: false,
@@ -347,6 +369,14 @@ export class InkPipeline {
     this.compositeMat.uniforms.uDarkTheme.value = isDarkSky ? 1.0 : 0.0;
     this.compositeMat.uniforms.uSkyTop.value.set(skyTopHex);
     this.compositeMat.uniforms.uSkyBot.value.set(skyBotHex);
+
+    const isPersp = camera instanceof THREE.PerspectiveCamera;
+    this.compositeMat.uniforms.uPerspectiveMode.value = isPersp ? 1.0 : 0.0;
+    if (isPersp) {
+      this.compositeMat.uniforms.uCamNearFar.value.set(camera.near, camera.far);
+    } else if (camera instanceof THREE.OrthographicCamera) {
+      this.compositeMat.uniforms.uCamNearFar.value.set(camera.near, camera.far);
+    }
 
     // Pass 1: Lit Storybook Color + DepthTexture
     renderer.setRenderTarget(this.colorRt);

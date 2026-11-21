@@ -24,6 +24,16 @@ import {
   computeMildWinter,
   makePlacementId,
 } from './regions';
+import {
+  CONTINENT_STRIPS,
+  CYLINDER_RADIUS,
+  ContinentStripId,
+  CylinderCameraPreset,
+  CylinderPlotDef,
+  CylinderWorld,
+  ProjectedPlotPin,
+  ViewMode,
+} from './cylinderWorld';
 
 export type BuildToolMode = 'view' | 'place' | 'delete';
 
@@ -459,10 +469,13 @@ function buildOsmFacadeTexture(wallHex: string, isHighrise: boolean): THREE.Canv
 export class DioramaEngine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
+  readonly cylinderScene = new THREE.Scene();
   readonly camera: THREE.OrthographicCamera;
+  readonly cylinderCamera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
   private pipeline = new InkPipeline();
   private models = new ModelLibrary();
+  private cylinderWorld: CylinderWorld;
 
   private uniforms: WorldShaderUniforms = {
     uSnowCoverage: { value: 1.0 },
@@ -475,6 +488,10 @@ export class DioramaEngine {
 
   private hemiLight = new THREE.HemisphereLight('#d6e5f2', '#9b8d79', 1.18);
   private sunLight = new THREE.DirectionalLight('#fff2da', 1.65);
+  private cylinderHemi = new THREE.HemisphereLight('#e5eef8', '#c6d6b6', 1.05);
+  private cylinderDir = new THREE.DirectionalLight('#fff2da', 0.95);
+  private cylinderAxisA = new THREE.PointLight('#fff4de', 1.18, 0, 0);
+  private cylinderAxisB = new THREE.PointLight('#fff0d2', 1.18, 0, 0);
 
   private islandGroup = new THREE.Group();
   private placedGroup = new THREE.Group();
@@ -505,6 +522,22 @@ export class DioramaEngine {
   private pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.02);
 
   // Public reactive state
+  private viewMode: ViewMode = 'cylinder';
+  private cylinderStrip: ContinentStripId = 2;
+  private cylinderPreset: CylinderCameraPreset = 'vista';
+  private focusedPlotId = 'sydney';
+  private rollAngle = CONTINENT_STRIPS[2].theta;
+  private targetRollAngle = CONTINENT_STRIPS[2].theta;
+  private axialZ = 82;
+  private targetAxialZ = 82;
+  private camHeight = 18.5;
+  private targetCamHeight = 18.5;
+  private camYaw = 0;
+  private targetCamYaw = 0;
+  private camPitch = -0.10;
+  private targetCamPitch = -0.10;
+  private tramTime = 0;
+
   private region: RegionBlueprint = cloneBlueprint(PRESET_REGIONS.sydney);
   private season: SeasonId = 'summer';
   private timeMode: TimeMode = 'day';
@@ -557,6 +590,11 @@ export class DioramaEngine {
     this.camera.position.set(18.5, 16.5, 18.5);
     this.camera.lookAt(0, 0.3, 0);
 
+    this.cylinderCamera = new THREE.PerspectiveCamera(64, aspect, 0.8, 460);
+    this.cylinderCamera.rotation.order = 'YXZ';
+    this.cylinderCamera.position.set(0, -CYLINDER_RADIUS + this.camHeight, this.axialZ);
+    this.cylinderCamera.rotation.set(this.camPitch, this.camYaw, 0);
+
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -566,6 +604,7 @@ export class DioramaEngine {
     this.controls.minPolarAngle = 0.35;
     this.controls.maxPolarAngle = 1.24;
     this.controls.target.set(0, 0.35, 0);
+    this.controls.enabled = this.viewMode === 'plot';
     this.controls.update();
     this.controls.addEventListener('start', () => {
       this.cameraTween = null;
@@ -591,6 +630,18 @@ export class DioramaEngine {
     this.scene.add(this.festiveGroup);
     this.scene.add(this.fxGroup);
     this.scene.add(this.ghostGroup);
+
+    this.cylinderDir.position.set(12, 24, 18);
+    this.cylinderAxisA.position.set(0, 0, -34);
+    this.cylinderAxisB.position.set(0, 0, 34);
+    this.cylinderScene.add(
+      this.cylinderHemi,
+      this.cylinderDir,
+      this.cylinderAxisA,
+      this.cylinderAxisB,
+    );
+    this.cylinderWorld = new CylinderWorld(this.cylinderScene, this.uniforms);
+    this.cylinderWorld.root.rotation.z = -this.rollAngle;
 
     this.initWeatherAndFx();
     this.rebuildIslandGeometry();
@@ -625,6 +676,12 @@ export class DioramaEngine {
     }
 
     return {
+      viewMode: this.viewMode,
+      cylinderStrip: this.cylinderStrip,
+      cylinderPreset: this.cylinderPreset,
+      focusedPlotId: this.focusedPlotId,
+      focusedPlot: this.cylinderWorld.getPlotById(this.focusedPlotId),
+      cylinderPlotCount: this.cylinderWorld.getPlots().length,
       region: this.region,
       season: this.season,
       timeMode: this.timeMode,
@@ -1307,6 +1364,28 @@ export class DioramaEngine {
     this.uniforms.uWindowGlow.value = windowGlow;
     this.uniforms.uSkyTint.value.set(skyTint);
 
+    // Sync O'Neill Cylinder atmospheric perspective, axial sun/moon illumination, and skylight stars
+    const cylFogHex = isDarkSky
+      ? '#141d31'
+      : this.timeMode === 'sunset'
+        ? '#cfa186'
+        : this.renderStyle === 'hd'
+          ? '#bcd3e0'
+          : '#ebe5d6';
+    this.cylinderScene.background = new THREE.Color(cylFogHex);
+    this.cylinderScene.fog = new THREE.Fog(cylFogHex, 96, 340);
+    this.cylinderHemi.color.set(hemiSky);
+    this.cylinderHemi.groundColor.set(hemiGnd);
+    this.cylinderHemi.intensity = isDarkSky ? 0.65 : 1.02;
+    this.cylinderDir.color.set(sunCol);
+    this.cylinderDir.intensity = isDarkSky ? 0.36 : 0.92;
+    const axisIntensity = isDarkSky ? 0.48 : this.timeMode === 'sunset' ? 1.05 : 1.24;
+    this.cylinderAxisA.color.set(sunCol);
+    this.cylinderAxisB.color.set(sunCol);
+    this.cylinderAxisA.intensity = axisIntensity;
+    this.cylinderAxisB.intensity = axisIntensity;
+    this.cylinderWorld.applyAtmosphere(this.timeMode, this.renderStyle);
+
     for (const e of [...this.placedEntries, ...this.festiveEntries]) {
       if (e.asset.pointLight) {
         const isEclipse = this.timeMode === 'eclipse';
@@ -1525,6 +1604,160 @@ export class DioramaEngine {
     this.onStateChanged?.();
   }
 
+  setViewMode(mode: ViewMode): void {
+    const enteringCylinder = mode === 'cylinder' && this.viewMode !== 'cylinder';
+    this.viewMode = mode;
+    this.controls.enabled = mode === 'plot';
+    if (mode === 'cylinder') {
+      this.ghostGroup.visible = false;
+      this.hoverValid = false;
+      if (enteringCylinder) {
+        this.rollAngle = this.targetRollAngle;
+        this.axialZ = this.targetAxialZ;
+        this.camHeight = this.targetCamHeight;
+        this.camYaw = this.targetCamYaw;
+        this.camPitch = this.targetCamPitch;
+      }
+    } else {
+      this.rebuildGhostPreview();
+    }
+    this.applyAtmosphere();
+    this.onStateChanged?.();
+  }
+
+  setCylinderStrip(strip: ContinentStripId): void {
+    this.cylinderStrip = strip;
+    const desired = CONTINENT_STRIPS[strip].theta;
+    const diff = Math.atan2(
+      Math.sin(desired - this.targetRollAngle),
+      Math.cos(desired - this.targetRollAngle),
+    );
+    this.targetRollAngle += diff;
+
+    // Select nearest plot on the chosen continent strip
+    const candidates = this.cylinderWorld.getPlots().filter((p) => p.strip === strip);
+    if (candidates.length > 0) {
+      candidates.sort(
+        (a, b) => Math.abs(a.axialZ - this.targetAxialZ) - Math.abs(b.axialZ - this.targetAxialZ),
+      );
+      this.focusedPlotId = candidates[0].id;
+    }
+    this.onStateChanged?.();
+  }
+
+  setCylinderCameraPreset(preset: CylinderCameraPreset): void {
+    this.cylinderPreset = preset;
+    const focused = this.cylinderWorld.getPlotById(this.focusedPlotId);
+    const aspect = this.cylinderCamera.aspect || 1.6;
+    if (preset === 'vista') {
+      this.targetCamHeight = aspect < 1.0 ? 16.5 : 18.5;
+      this.targetCamYaw = 0;
+      this.targetCamPitch = aspect < 1.0 ? -0.16 : -0.10;
+      this.cylinderCamera.fov = aspect < 1.0 ? 74 : 66;
+      this.cylinderCamera.updateProjectionMatrix();
+      if (focused) {
+        this.targetAxialZ = Math.max(-62, Math.min(82, focused.axialZ + (aspect < 1.0 ? 40 : 37)));
+      }
+    } else if (preset === 'tram') {
+      this.targetCamHeight = 7.4;
+      this.targetCamYaw = 0;
+      this.targetCamPitch = 0.08;
+      this.cylinderCamera.fov = aspect < 1.0 ? 70 : 62;
+      this.cylinderCamera.updateProjectionMatrix();
+    } else {
+      this.targetCamHeight = 48;
+      this.targetCamYaw = 0;
+      this.targetCamPitch = -0.02;
+      this.targetAxialZ = 76;
+      this.cylinderCamera.fov = aspect < 1.0 ? 76 : 68;
+      this.cylinderCamera.updateProjectionMatrix();
+    }
+    this.onStateChanged?.();
+  }
+
+  focusCylinderPlot(plotId: string): CylinderPlotDef | null {
+    const plot = this.cylinderWorld.getPlotById(plotId);
+    if (!plot) return null;
+    this.focusedPlotId = plot.id;
+    this.cylinderPreset = 'vista';
+    this.cylinderStrip = plot.strip;
+    const desired = CONTINENT_STRIPS[plot.strip].theta;
+    const diff = Math.atan2(
+      Math.sin(desired - this.targetRollAngle),
+      Math.cos(desired - this.targetRollAngle),
+    );
+    this.targetRollAngle += diff;
+    const aspect = this.cylinderCamera.aspect || 1.6;
+    this.targetCamHeight = aspect < 1.0 ? 16.5 : 18.5;
+    this.targetCamYaw = 0;
+    this.targetCamPitch = aspect < 1.0 ? -0.16 : -0.10;
+    this.targetAxialZ = Math.max(-62, Math.min(82, plot.axialZ + (aspect < 1.0 ? 40 : 37)));
+    this.cylinderCamera.fov = aspect < 1.0 ? 74 : 66;
+    this.cylinderCamera.updateProjectionMatrix();
+    this.onStateChanged?.();
+    return plot;
+  }
+
+  registerCustomPlotInCylinder(label: string, lat: number, lon: number): CylinderPlotDef {
+    const plot = this.cylinderWorld.upsertCustomPlot(label, lat, lon);
+    this.focusedPlotId = plot.id;
+    this.cylinderStrip = plot.strip;
+    const desired = CONTINENT_STRIPS[plot.strip].theta;
+    const diff = Math.atan2(
+      Math.sin(desired - this.targetRollAngle),
+      Math.cos(desired - this.targetRollAngle),
+    );
+    this.targetRollAngle += diff;
+    this.targetAxialZ = Math.max(-62, Math.min(82, plot.axialZ + 37));
+    this.onStateChanged?.();
+    return plot;
+  }
+
+  handleCylinderDrag(dx: number, dy: number): void {
+    if (this.cylinderPreset === 'axis') {
+      this.targetRollAngle -= dx * 0.0055;
+      this.targetCamPitch = Math.max(-0.45, Math.min(0.45, this.targetCamPitch + dy * 0.004));
+      return;
+    }
+    this.targetCamYaw = Math.max(-1.05, Math.min(1.05, this.targetCamYaw - dx * 0.0045));
+    this.targetCamPitch = Math.max(-0.35, Math.min(1.05, this.targetCamPitch + dy * 0.0045));
+  }
+
+  handleCylinderWheel(deltaY: number): void {
+    if (this.cylinderPreset === 'tram') {
+      this.cylinderPreset = 'vista';
+      this.targetCamHeight = 18.5;
+      this.onStateChanged?.();
+    }
+    this.targetAxialZ = Math.max(-66, Math.min(84, this.targetAxialZ + deltaY * 0.035));
+  }
+
+  nudgeCylinder(dAxial: number, dRoll: number): void {
+    if (this.cylinderPreset === 'tram' && Math.abs(dAxial) > 0) {
+      this.cylinderPreset = 'vista';
+      this.targetCamHeight = 18.5;
+    }
+    this.targetAxialZ = Math.max(-66, Math.min(84, this.targetAxialZ + dAxial));
+    this.targetRollAngle += dRoll;
+  }
+
+  handleCylinderTap(clientX: number, clientY: number): CylinderPlotDef | null {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.cylinderCamera);
+    return this.cylinderWorld.pickPlot(this.raycaster);
+  }
+
+  getProjectedCylinderPins(): ProjectedPlotPin[] {
+    if (this.viewMode !== 'cylinder') return [];
+    const w = this.canvas.clientWidth || window.innerWidth;
+    const h = this.canvas.clientHeight || window.innerHeight;
+    return this.cylinderWorld.getProjectedPins(this.cylinderCamera, w, h, this.focusedPlotId);
+  }
+
   setCameraPreset(preset: CameraPresetId): void {
     const map: Record<CameraPresetId, { targetAz: number; targetPol: number; targetZoom: number }> = {
       cinematic: { targetAz: Math.PI * 0.25, targetPol: 0.9, targetZoom: 1.0 },
@@ -1563,6 +1796,11 @@ export class DioramaEngine {
   }
 
   orbitRotateBy(deltaAzimuthRad: number): void {
+    if (this.viewMode === 'cylinder') {
+      const step = deltaAzimuthRad > 0 ? 1 : 2;
+      this.setCylinderStrip(((this.cylinderStrip + step) % 3) as ContinentStripId);
+      return;
+    }
     const offset = this.camera.position.clone().sub(this.controls.target);
     const axis = new THREE.Vector3(0, 1, 0);
     offset.applyAxisAngle(axis, deltaAzimuthRad);
@@ -1585,6 +1823,10 @@ export class DioramaEngine {
   }
 
   resetCamera(): void {
+    if (this.viewMode === 'cylinder') {
+      this.setCylinderCameraPreset('vista');
+      return;
+    }
     this.setCameraOrbit(Math.PI * 0.25, 0.88, 1.0);
   }
 
@@ -1717,6 +1959,11 @@ export class DioramaEngine {
     this.camera.bottom = -f / 2;
     this.camera.updateProjectionMatrix();
 
+    this.cylinderCamera.aspect = aspect;
+    this.cylinderCamera.fov =
+      aspect < 1.0 ? 74 : this.cylinderPreset === 'axis' ? 68 : this.cylinderPreset === 'tram' ? 62 : 66;
+    this.cylinderCamera.updateProjectionMatrix();
+
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
@@ -1725,6 +1972,52 @@ export class DioramaEngine {
 
   step(dt: number): void {
     this.simTime += dt;
+
+    const nightWarmth =
+      this.timeMode === 'night'
+        ? 1.0
+        : this.timeMode === 'sunset'
+          ? 0.6
+          : this.timeMode === 'eclipse'
+            ? 0.45
+            : 0.0;
+    const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
+
+    if (this.viewMode === 'cylinder') {
+      if (this.cylinderPreset === 'tram') {
+        this.tramTime += dt;
+        this.targetAxialZ = Math.cos(this.tramTime * 0.14) * 62;
+      }
+
+      const ease = Math.min(1, dt * 8.5);
+      this.rollAngle += (this.targetRollAngle - this.rollAngle) * ease;
+      this.axialZ += (this.targetAxialZ - this.axialZ) * ease;
+      this.camHeight += (this.targetCamHeight - this.camHeight) * ease;
+      this.camYaw += (this.targetCamYaw - this.camYaw) * ease;
+      this.camPitch += (this.targetCamPitch - this.camPitch) * ease;
+
+      this.cylinderWorld.root.rotation.z = -this.rollAngle;
+      this.cylinderCamera.position.set(0, -CYLINDER_RADIUS + this.camHeight, this.axialZ);
+      this.cylinderCamera.rotation.set(this.camPitch, this.camYaw, 0);
+      this.cylinderWorld.update(dt, this.simTime, this.focusedPlotId);
+
+      this.pipeline.render(
+        this.renderer,
+        this.cylinderScene,
+        this.cylinderCamera,
+        nightWarmth,
+        isDarkSky,
+        this.skyTopHex,
+        this.skyBotHex,
+        () => {},
+      );
+
+      if (!this.readyFired) {
+        this.readyFired = true;
+        (window as unknown as { __renderReady?: boolean }).__renderReady = true;
+      }
+      return;
+    }
 
     // Smooth camera preset tweening
     if (this.cameraTween) {
@@ -1839,17 +2132,6 @@ export class DioramaEngine {
       this.weatherGeo.attributes.position.needsUpdate = true;
     }
 
-    const nightWarmth =
-      this.timeMode === 'night'
-        ? 1.0
-        : this.timeMode === 'sunset'
-          ? 0.6
-          : this.timeMode === 'eclipse'
-            ? 0.45
-            : 0.0;
-
-    const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
-
     this.pipeline.render(
       this.renderer,
       this.scene,
@@ -1875,6 +2157,7 @@ export class DioramaEngine {
 
   dispose(): void {
     this.controls.dispose();
+    this.cylinderWorld.dispose();
     this.pipeline.dispose();
     this.renderer.dispose();
   }

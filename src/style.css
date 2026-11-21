@@ -70,8 +70,83 @@ html.theme-pocket #app {
 
 html.clean-mode .hud-overlay,
 html.clean-mode .loading-badge,
+html.clean-mode .cylinder-pins,
 html.clean-mode .modal-backdrop {
   display: none !important;
+}
+
+.cylinder-pins {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 6;
+}
+
+.cyl-pin {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -100%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--text-main);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+  transition: border-color 0.15s ease, opacity 0.15s ease;
+}
+
+:root:not(.theme-pocket) .cyl-pin {
+  background-color: rgba(16, 21, 32, 0.88);
+  color: rgba(244, 246, 250, 0.96);
+  border-color: rgba(206, 220, 238, 0.28);
+}
+
+:root:not(.theme-pocket) .cyl-pin.focused {
+  background-color: rgba(232, 168, 76, 0.28);
+  border-color: #e8a84c;
+  color: #fff6e6;
+}
+
+.cyl-pin:hover {
+  border-color: var(--accent);
+}
+
+.cyl-pin.overhead {
+  opacity: 0.68;
+  font-size: 10.5px;
+  padding: 3px 7px;
+}
+
+.cyl-pin.focused {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  opacity: 1;
+  box-shadow: 0 0 0 2px rgba(232, 168, 76, 0.22);
+}
+
+.cyl-pin-tag {
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-sub);
+}
+
+.cyl-pin.focused .cyl-pin-tag {
+  color: var(--accent);
 }
 
 .hidden {
@@ -441,6 +516,28 @@ button.active {
   color: var(--text-sub);
 }
 
+.cylinder-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.cylinder-bar .pill-group {
+  flex-wrap: wrap;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 5px;
+}
+
+.strip-btn,
+.cyl-cam-btn {
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  border-radius: 999px !important;
+}
+
 .cam-presets {
   border-radius: 999px;
   padding: 3px 5px;
@@ -652,9 +749,15 @@ button.active {
     font-size: 10.5px;
   }
 
-  .cam-btn {
-    padding: 3px 7px !important;
-    font-size: 10.5px !important;
+  .cam-btn,
+  .strip-btn,
+  .cyl-cam-btn {
+    padding: 3px 6px !important;
+    font-size: 10px !important;
+  }
+
+  .cylinder-bar {
+    gap: 4px;
   }
 
   .dock-btn {

@@ -17,10 +17,11 @@
   <body>
     <div id="app">
       <canvas id="gl-canvas"></canvas>
+      <div id="cylinder-pins" class="cylinder-pins"></div>
 
       <div id="loading-badge" class="loading-badge">
         <span class="dot"></span>
-        <span>正在加载 3D 建筑精模与手绘描边管线...</span>
+        <span>正在加载库珀空间站与 3D 微缩街区...</span>
       </div>
 
       <div class="hud-overlay">
@@ -29,24 +30,28 @@
           <div class="location-card">
             <div class="loc-header">
               <span class="loc-dot"></span>
-              <strong id="loc-name">悉尼 · 蓝花楹海湾</strong>
-              <span id="weather-pill" class="meta-pill">夏 · 微风</span>
+              <strong id="loc-name">库珀空间站 · 奥尼尔圆筒</strong>
+              <span id="weather-pill" class="meta-pill">3 大陆带 · 昼</span>
             </div>
-            <div id="loc-sub" class="loc-sub">33.85°S 151.22°E · Sydney Kirribilli Cove</div>
-            <div id="field-note" class="field-note">11 月底北半球入冬时悉尼正值蓝花楹初夏巅峰：紫色花云缀满岸坡，海港白帆点点。</div>
+            <div id="loc-sub" class="loc-sub">大洋海岸带 · 当前聚焦：悉尼 · 蓝花楹海湾（南半球初夏段）</div>
+            <div id="field-note" class="field-note">滚轮前后穿行气候轴，拖拽环望对岸倒悬大陆；点击地标切换，或直接「进入地块精建」做细部造景。</div>
             <div id="legend-row" class="legend-row"></div>
             <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
 
           <div class="top-controls">
+            <div class="pill-group" role="group" aria-label="视角层级">
+              <button class="mode-btn active" data-view="cylinder">🌌 圆筒世界</button>
+              <button class="mode-btn" data-view="plot">🏝️ 地块精建</button>
+            </div>
             <div class="pill-group" role="group" aria-label="描边风格">
               <button class="style-btn active" data-style="pocket">📜 建筑师手绘</button>
               <button class="style-btn" data-style="pixel">👾 像素描边</button>
               <button class="style-btn" data-style="hd">🎨 绘本描边</button>
             </div>
             <div class="pill-group">
-              <button id="btn-orbit-left" class="icon-btn" title="向左旋转 45°">↺</button>
-              <button id="btn-orbit-right" class="icon-btn" title="向右旋转 45°">↻</button>
+              <button id="btn-orbit-left" class="icon-btn" title="向左旋转 / 切换大陆带">↺</button>
+              <button id="btn-orbit-right" class="icon-btn" title="向右旋转 / 切换大陆带">↻</button>
               <button id="btn-cam-reset" class="icon-btn" title="重置视角">🧭</button>
             </div>
           </div>
@@ -111,8 +116,22 @@
             <div id="build-hint" class="build-hint">点击地面格点摆放建筑，单指/左键按住拖拽可 360° 旋转岛屿</div>
           </section>
 
-          <!-- Camera Presets -->
-          <div id="cam-presets" class="pill-group cam-presets" role="group" aria-label="视角预设">
+          <!-- Cylinder Explorer Bar -->
+          <div id="cylinder-bar" class="cylinder-bar">
+            <div class="pill-group" role="group" aria-label="大陆风貌带">
+              <button class="strip-btn" data-strip="0">🌏 东亚水乡带</button>
+              <button class="strip-btn" data-strip="1">🏰 欧陆田园带</button>
+              <button class="strip-btn active" data-strip="2">🌊 大洋海岸带</button>
+            </div>
+            <div class="pill-group" role="group" aria-label="圆筒机位">
+              <button class="cyl-cam-btn active" data-cyl-cam="vista">🌌 舱内广角</button>
+              <button class="cyl-cam-btn" data-cyl-cam="tram">🚃 电车漫游</button>
+              <button class="cyl-cam-btn" data-cyl-cam="axis">🛰️ 中轴环览</button>
+            </div>
+          </div>
+
+          <!-- Camera Presets (Plot mode) -->
+          <div id="cam-presets" class="pill-group cam-presets hidden" role="group" aria-label="视角预设">
             <button class="cam-btn active" data-cam="cinematic">🎬 全景</button>
             <button class="cam-btn" data-cam="closeup">🌉 近景</button>
             <button class="cam-btn" data-cam="street">🏘️ 街角</button>
@@ -121,9 +140,11 @@
 
           <!-- Main Floating Bottom Dock -->
           <div class="dock-bar">
-            <button id="btn-toggle-build" class="dock-btn">🛠️ 建造 / 物料</button>
+            <button id="btn-enter-plot" class="dock-btn">🛠️ 进入地块精建</button>
+            <button id="btn-back-cylinder" class="dock-btn hidden">🌌 返回圆筒大地图</button>
+            <button id="btn-toggle-build" class="dock-btn hidden">🧱 建造 / 物料</button>
             <button id="btn-toggle-scene" class="dock-btn">☀️ 场景调节</button>
-            <div id="placed-count-pill" class="dock-count">共 30 处可改建</div>
+            <div id="placed-count-pill" class="dock-count">共 9 座空间站地块</div>
           </div>
         </footer>
       </div>
@@ -132,7 +153,7 @@
       <div id="region-modal" class="modal-backdrop hidden">
         <div class="glass-panel modal-card">
           <div class="panel-head">
-            <span>🌍 选择预设地域，或输入地名/经纬度生成真实 OSM 微缩岛</span>
+            <span>🌍 选择预设地块，或输入全球地名/经纬度生成并自动归入圆筒大陆带</span>
             <button id="btn-close-regions" class="close-btn">✕</button>
           </div>
           <div class="preset-grid">
@@ -155,12 +176,12 @@
           </div>
 
           <div class="custom-coord-box">
-            <div class="col-title">全球真实街区与经纬度生成（OpenStreetMap + Open-Meteo 实况联动）</div>
+            <div class="col-title">全球真实街区与经纬度生成（OpenStreetMap + Open-Meteo · 自动匹配圆筒气候带）</div>
             <div class="osm-quick-row">
+              <button class="osm-quick-chip" data-lat="23.1216" data-lon="113.2650" data-label="广州 · 北京路">🇨🇳 广州·北京路</button>
               <button class="osm-quick-chip" data-lat="31.2162" data-lon="121.4404" data-label="上海 · 安福路">🇨🇳 上海·安福路</button>
               <button class="osm-quick-chip" data-lat="52.3635" data-lon="4.8960" data-label="阿姆斯特丹运河">🇳🇱 阿姆斯特丹运河</button>
               <button class="osm-quick-chip" data-lat="35.0061" data-lon="135.7751" data-label="京都 · 祇园白川">🇯🇵 京都·祇园白川</button>
-              <button class="osm-quick-chip" data-lat="30.1448" data-lon="113.0881" data-label="湖北监利 · 网市镇">🏡 湖北监利·网市镇</button>
             </div>
             <div class="place-search-row">
               <input id="input-place" type="text" placeholder="输入全球任意地名，如：上海安福路 / Kyoto Gion" />
