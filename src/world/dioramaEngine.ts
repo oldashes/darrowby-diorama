@@ -458,6 +458,8 @@ export class DioramaEngine {
   private modelsLoaded = false;
   private readyFired = false;
   private frustumSize = 23.5;
+  private skyTopHex = '#47688a';
+  private skyBotHex = '#a8c2d4';
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -1066,6 +1068,8 @@ export class DioramaEngine {
     let hemiInt = 1.2;
     let sunPos: [number, number, number] = [16, 22, 12];
     let bgHex = '#141720';
+    let skyTopHex = '#47688a';
+    let skyBotHex = '#a8c2d4';
     let windowGlow = 0.05;
     let lightInt = 0.0;
     let skyTint = '#ffffff';
@@ -1078,6 +1082,8 @@ export class DioramaEngine {
       hemiInt = 1.15;
       sunPos = [19, 13, 14];
       bgHex = '#171b26';
+      skyTopHex = '#536991';
+      skyBotHex = '#e3b59b';
       windowGlow = 0.18;
       lightInt = 0.35;
       skyTint = '#ffeede';
@@ -1089,6 +1095,8 @@ export class DioramaEngine {
       hemiInt = 1.05;
       sunPos = [-20, 10, 14];
       bgHex = '#181421';
+      skyTopHex = '#342347';
+      skyBotHex = '#d67d62';
       windowGlow = 0.65;
       lightInt = 1.35;
       skyTint = '#ffd3ba';
@@ -1100,6 +1108,8 @@ export class DioramaEngine {
       hemiInt = 0.72;
       sunPos = [-12, 19, -10];
       bgHex = '#0d111a';
+      skyTopHex = '#0b1122';
+      skyBotHex = '#233454';
       windowGlow = 1.0;
       lightInt = 2.4;
       skyTint = '#9fb4e0';
@@ -1111,6 +1121,8 @@ export class DioramaEngine {
       hemiInt = 1.05;
       sunPos = [16, 20, 12];
       bgHex = '#101420';
+      skyTopHex = '#151c30';
+      skyBotHex = '#3f4b66';
       windowGlow = 0.25;
       lightInt = 0.4;
       skyTint = '#e8ecf8';
@@ -1124,11 +1136,20 @@ export class DioramaEngine {
       this.uniforms.uUmbraStrength.value = 0.0;
     }
 
+    this.skyTopHex = skyTopHex;
+    this.skyBotHex = skyBotHex;
+    const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
+
     if (this.renderStyle === 'pocket') {
-      bgHex =
-        this.timeMode === 'night' || this.timeMode === 'eclipse'
-          ? '#1e2534'
-          : '#f2ede0';
+      if (!isDarkSky) {
+        sunInt *= 0.86;
+        hemiInt *= 1.24;
+      }
+      bgHex = isDarkSky ? '#1e2534' : '#f2ede0';
+    } else if (this.renderStyle === 'hd') {
+      sunInt *= 1.16;
+      hemiInt *= 0.96;
+      bgHex = skyBotHex;
     }
 
     this.sunLight.color.set(sunCol);
@@ -1627,13 +1648,22 @@ export class DioramaEngine {
 
     const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
 
-    this.pipeline.render(this.renderer, this.scene, this.camera, nightWarmth, isDarkSky, (hide) => {
-      this.fxGroup.visible = !hide;
-      this.ghostGroup.visible = !hide && this.toolMode === 'place' && this.hoverValid;
-      for (const wm of this.waterMeshes) {
-        wm.visible = !hide;
-      }
-    });
+    this.pipeline.render(
+      this.renderer,
+      this.scene,
+      this.camera,
+      nightWarmth,
+      isDarkSky,
+      this.skyTopHex,
+      this.skyBotHex,
+      (hide) => {
+        this.fxGroup.visible = !hide;
+        this.ghostGroup.visible = !hide && this.toolMode === 'place' && this.hoverValid;
+        for (const wm of this.waterMeshes) {
+          wm.visible = !hide;
+        }
+      },
+    );
 
     if (!this.readyFired) {
       this.readyFired = true;

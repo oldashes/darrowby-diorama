@@ -25,6 +25,8 @@ uniform vec2 uViewportCss;
 uniform float uDarkTheme;
 uniform float uInkStrength;
 uniform vec3 uInkColor;
+uniform vec3 uSkyTop;
+uniform vec3 uSkyBot;
 uniform float uNightWarmth;
 
 float bayer4(vec2 p) {
@@ -68,15 +70,27 @@ vec3 pocketPaperSrgb(vec2 uv) {
   return clamp(col + grain, 0.0, 1.0);
 }
 
+vec3 hdSkyLinear(vec2 uv) {
+  vec3 grad = mix(uSkyBot, uSkyTop, smoothstep(0.0, 1.0, uv.y));
+  float sunGlow = smoothstep(0.85, 0.0, length(uv - vec2(0.78, 0.82))) * 0.12 * (1.0 - uDarkTheme);
+  return grad + vec3(1.0, 0.88, 0.68) * sunGlow;
+}
+
 void main() {
   vec3 col = texture2D(uColorTex, vUv).rgb;
-  vec2 wobble = uPocketMode > 0.5
-    ? vec2(sin(vUv.y * 210.0), cos(vUv.x * 210.0)) * uTexelSize * 0.35
+  bool isPocket = uPocketMode > 0.5;
+  bool isPixel = uPixelMode > 0.5;
+  bool isHd = !isPocket && !isPixel;
+
+  vec2 wobble = isPocket
+    ? vec2(sin(vUv.y * 240.0), cos(vUv.x * 240.0)) * uTexelSize * 0.85
     : vec2(0.0);
   vec2 sampleUv = vUv + wobble;
-  vec2 eOff = uPocketMode > 0.5
-    ? uTexelSize * 1.22
-    : uTexelSize * mix(1.75, 1.0, uPixelMode);
+  vec2 eOff = isPocket
+    ? uTexelSize * 1.15
+    : isPixel
+      ? uTexelSize * 1.0
+      : uTexelSize * 2.15;
 
   float dC = texture2D(uDepthTex, vUv).r;
   float dL = texture2D(uDepthTex, sampleUv - vec2(eOff.x, 0.0)).r;
@@ -97,66 +111,117 @@ void main() {
   float isBg = step(0.9992, min(dC, minD));
   float depthEdge = smoothstep(0.0055, 0.016, depthDiff) * (1.0 - isBg);
 
-  if (uPocketMode > 0.5 && isBg > 0.5) {
+  if (isPocket && isBg > 0.5) {
     vec3 paperSrgb = pocketPaperSrgb(vUv);
     float paperVig = smoothstep(0.65, 1.32, length(vUv - 0.5) * 1.42) * 0.05;
     gl_FragColor = vec4(paperSrgb * (1.0 - paperVig), 1.0);
     return;
   }
 
-  // Clean interior normal crease detection (suppressed on sky/void and flat grass)
+  if (isHd && isBg > 0.5) {
+    vec3 skySrgb = pow(aces(hdSkyLinear(vUv) * 1.06), vec3(1.0 / 2.2));
+    float vigBg = 1.0 - smoothstep(0.62, 1.30, length(vUv - 0.5) * 1.42) * 0.14;
+    gl_FragColor = vec4(skySrgb * vigBg, 1.0);
+    return;
+  }
+
+  // Interior normal crease detection
   float nDelta = max(length(nR - nL), length(nU - nD));
   float nearGeom = 1.0 - step(0.9985, dC);
-  float normalEdge = smoothstep(0.56, 1.05, nDelta) * nearGeom;
+  float normalWeight = isPocket ? 0.62 : isHd ? 0.78 : 0.68;
+  float normalEdge = smoothstep(0.54, 1.02, nDelta) * nearGeom;
+  float edge = clamp(max(depthEdge, normalEdge * normalWeight), 0.0, 1.0) * uInkStrength;
 
-  float edge = clamp(max(depthEdge, normalEdge * (uPocketMode > 0.5 ? 0.58 : 0.65)), 0.0, 1.0) * uInkStrength;
-
-  // Subtle sunlit storybook top-edge warm highlight on roof ridges and eaves
+  // Sunlit top-edge rim highlight (strong warm bounce in HD storybook, subtle in pocket/pixel)
   float topCrease = clamp(nC.y - nD.y, 0.0, 1.0) * nearGeom;
-  col += vec3(0.075, 0.068, 0.052) * smoothstep(0.28, 0.72, topCrease) * (1.0 - uNightWarmth * 0.65);
+  float rimGain = isHd ? 0.11 : isPocket ? 0.03 : 0.065;
+  col += vec3(rimGain, rimGain * 0.90, rimGain * 0.70) * smoothstep(0.24, 0.72, topCrease) * (1.0 - uNightWarmth * 0.65);
 
-  // Soft warm bloom around bright glowing cottage windows and street lanterns
+  // Soft warm bloom (lush in HD storybook; night-only in pocket watercolor; gentle in pixel)
   vec3 c1 = texture2D(uColorTex, vUv + vec2(uTexelSize.x * 2.2, 0.0)).rgb;
   vec3 c2 = texture2D(uColorTex, vUv - vec2(uTexelSize.x * 2.2, 0.0)).rgb;
   vec3 c3 = texture2D(uColorTex, vUv + vec2(0.0, uTexelSize.y * 2.2)).rgb;
   vec3 c4 = texture2D(uColorTex, vUv - vec2(0.0, uTexelSize.y * 2.2)).rgb;
   vec3 avgBloom = (c1 + c2 + c3 + c4) * 0.25;
-  float bright = max(dot(avgBloom, vec3(0.299, 0.587, 0.114)) - 0.85, 0.0);
-  col += avgBloom * clamp(bright * 0.48, 0.0, 0.42);
+  float bright = max(dot(avgBloom, vec3(0.299, 0.587, 0.114)) - 0.82, 0.0);
+  float bloomAmt = isHd
+    ? clamp(bright * 0.68, 0.0, 0.56)
+    : isPocket
+      ? clamp(bright * 0.45, 0.0, 0.36) * smoothstep(0.35, 0.95, uNightWarmth)
+      : clamp(bright * 0.44, 0.0, 0.38);
+  col += avgBloom * bloomAmt;
 
-  if (uPocketMode > 0.5) {
-    // Replace exterior clear sky pixel adjacent to island boundary with paper tone to eliminate dark halo
+  if (isPocket) {
     if (dC >= 0.9992) {
       vec3 extPaper = pocketPaperSrgb(vUv);
       col = pow(extPaper, vec3(2.2));
     }
-    vec3 geomCol = dC >= 0.9992 ? vec3(0.16, 0.13, 0.10) : col;
-    vec3 pocketInk = mix(geomCol * 0.24, vec3(0.032, 0.024, 0.020), 0.32);
-    col = mix(col, pocketInk, edge * 0.82);
 
-    vec3 srgb = pow(aces(col * 1.04), vec3(1.0 / 2.2));
-    srgb = mix(
-      srgb,
-      srgb * vec3(1.015, 1.00, 0.965) + vec3(0.022, 0.020, 0.014) * (1.0 - uDarkTheme),
-      0.55
-    );
+    vec3 srgb = pow(aces(col * 1.02), vec3(1.0 / 2.2));
+    vec2 cssPos = vUv * uViewportCss;
+
+    if (dC < 0.9992) {
+      // 1. Flat architectural watercolor wash (5-stop soft luminance quantization + matte desaturation)
+      float luma = dot(srgb, vec3(0.299, 0.587, 0.114));
+      float qLuma = floor(luma * 5.0 + 0.5) / 5.0;
+      float flatLuma = mix(luma, qLuma, 0.54);
+      vec3 celCol = mix(srgb, clamp(srgb * (flatLuma / max(luma, 0.001)), 0.0, 1.0), 0.72);
+      srgb = mix(vec3(flatLuma), celCol, 0.84);
+
+      // 2. Cool architectural slate-blue shadow wash in daytime
+      float shadowTintMask = smoothstep(0.58, 0.24, luma) * (1.0 - uDarkTheme);
+      srgb = mix(srgb, mix(srgb, vec3(0.38, 0.46, 0.59), 0.28), shadowTintMask);
+
+      // 3. 45-degree technical pen cross-hatching on shaded planes
+      float shadeMask = smoothstep(0.56, 0.24, luma) * (1.0 - uDarkTheme);
+      float diag1 = smoothstep(0.76, 0.96, sin((cssPos.x + cssPos.y) * 1.25));
+      float diag2 = smoothstep(0.82, 0.98, sin((cssPos.x - cssPos.y) * 1.25)) * smoothstep(0.36, 0.16, luma);
+      float hatch = max(diag1 * 0.55, diag2 * 0.45) * shadeMask;
+      srgb = mix(srgb, vec3(0.24, 0.23, 0.26), hatch * 0.30);
+
+      // 4. Cotton paper tooth texture across painted surfaces
+      float tooth = (fract(sin(dot(floor(cssPos * 0.9), vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.042;
+      srgb = clamp(srgb + tooth * (1.0 - uDarkTheme * 0.55), 0.0, 1.0);
+    }
+
+    // 5. Hue-tinted fine technical fountain pen ink (lineOf equivalent)
+    vec3 pocketInk = dC >= 0.9992
+      ? vec3(0.18, 0.15, 0.13)
+      : mix(srgb * 0.22, vec3(0.14, 0.12, 0.10), 0.42);
+    srgb = mix(srgb, pocketInk, edge * 0.88);
+
     float paperVig = smoothstep(0.65, 1.32, length(vUv - 0.5) * 1.42) * 0.05;
     gl_FragColor = vec4(srgb * (1.0 - paperVig), 1.0);
     return;
   }
 
-  // Apply crisp sepia-charcoal ink line
-  col = mix(col, pow(uInkColor, vec3(2.2)), edge);
+  if (isHd) {
+    if (dC >= 0.9992) {
+      col = hdSkyLinear(vUv);
+    }
+    vec3 brushInk = pow(vec3(0.176, 0.114, 0.078), vec3(2.2)); // warm walnut-sepia storybook brush #2d1d14
+    col = mix(col, brushInk, edge * 0.92);
 
-  // Optional Quack crisp 2px pixel-dither pass
-  if (uPixelMode > 0.5) {
-    float b = (bayer4(vUv * uPixelGrid) - 0.5) * 0.022;
-    col = max(col + b, vec3(0.0));
+    vec3 srgb = pow(aces(col * 1.08), vec3(1.0 / 2.2));
+    if (dC < 0.9992) {
+      float luma = dot(srgb, vec3(0.299, 0.587, 0.114));
+      srgb = clamp(mix(vec3(luma), srgb, 1.24), 0.0, 1.0);
+      srgb *= mix(vec3(1.04, 1.01, 0.96), vec3(1.0), uDarkTheme);
+    }
+    float vig = 1.0 - smoothstep(0.62, 1.30, length(vUv - 0.5) * 1.42) * 0.14;
+    gl_FragColor = vec4(clamp(srgb * vig, 0.0, 1.0), 1.0);
+    return;
   }
 
-  vec3 srgb = pow(aces(col * 1.06), vec3(1.0 / 2.2));
-
-  // Soft studio framing vignette
+  // Crisp Retro 2px Pixel Diorama (uPixelMode > 0.5)
+  col = mix(col, pow(uInkColor, vec3(2.2)), edge);
+  float b = (bayer4(vUv * uPixelGrid) - 0.5) * 0.024;
+  col = max(col + b, vec3(0.0));
+  vec3 srgb = pow(aces(col * 1.05), vec3(1.0 / 2.2));
+  if (dC < 0.9992) {
+    vec3 quant = floor(srgb * 26.0 + 0.5) / 26.0;
+    srgb = mix(srgb, quant, 0.45);
+  }
   float vig = 1.0 - smoothstep(0.58, 1.25, length(vUv - 0.5) * 1.42) * 0.16;
   gl_FragColor = vec4(srgb * vig, 1.0);
 }
@@ -212,7 +277,9 @@ export class InkPipeline {
         uViewportCss: { value: new THREE.Vector2(1280, 720) },
         uDarkTheme: { value: 0 },
         uInkStrength: { value: 0.78 },
-        uInkColor: { value: new THREE.Color('#27201b') },
+        uInkColor: { value: new THREE.Color('#1c1816') },
+        uSkyTop: { value: new THREE.Color('#47688a') },
+        uSkyBot: { value: new THREE.Color('#a8c2d4') },
         uNightWarmth: { value: 0 },
       },
       depthTest: false,
@@ -262,7 +329,7 @@ export class InkPipeline {
       this.compositeMat.uniforms.uPixelMode.value = style === 'pixel' ? 1.0 : 0.0;
       this.compositeMat.uniforms.uPocketMode.value = style === 'pocket' ? 1.0 : 0.0;
       this.compositeMat.uniforms.uInkStrength.value =
-        style === 'pixel' ? 0.85 : style === 'pocket' ? 0.82 : 0.68;
+        style === 'pixel' ? 0.88 : style === 'pocket' ? 0.80 : 0.78;
     }
   }
 
@@ -272,10 +339,14 @@ export class InkPipeline {
     camera: THREE.Camera,
     nightWarmth: number,
     isDarkSky: boolean,
+    skyTopHex: string,
+    skyBotHex: string,
     toggleFxForNormals: (hidden: boolean) => void,
   ): void {
     this.compositeMat.uniforms.uNightWarmth.value = nightWarmth;
     this.compositeMat.uniforms.uDarkTheme.value = isDarkSky ? 1.0 : 0.0;
+    this.compositeMat.uniforms.uSkyTop.value.set(skyTopHex);
+    this.compositeMat.uniforms.uSkyBot.value.set(skyBotHex);
 
     // Pass 1: Lit Storybook Color + DepthTexture
     renderer.setRenderTarget(this.colorRt);
@@ -294,7 +365,7 @@ export class InkPipeline {
     toggleFxForNormals(false);
     scene.background = prevBg;
 
-    // Pass 3: Ink Outlines + Pixel Dither / HD Tone / Pocket Paper Composite to Screen
+    // Pass 3: Ink Outlines + Pixel Dither / HD Storybook / Pocket Watercolor Composite to Screen
     renderer.setRenderTarget(null);
     renderer.render(this.quadScene, this.quadCam);
   }
