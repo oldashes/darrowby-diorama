@@ -11,6 +11,7 @@ import { playPlaceSound, playRemoveSound } from '../audio/sfx';
 import { InkPipeline } from '../render/inkPipeline';
 import {
   CameraPresetId,
+  LiveWeatherReport,
   PRESET_REGIONS,
   PlacedItemData,
   RegionBlueprint,
@@ -20,6 +21,7 @@ import {
   TimeMode,
   WeatherId,
   cloneBlueprint,
+  computeMildWinter,
   makePlacementId,
 } from './regions';
 
@@ -52,6 +54,7 @@ const STORAGE_PREFIX = 'darrowby_diorama_v1_';
 export function buildIslandGroundTexture(
   region: RegionBlueprint,
   season: SeasonId,
+  snowy = season === 'winter' && !region.mildWinter,
 ): THREE.CanvasTexture {
   const size = 1024;
   const c = document.createElement('canvas');
@@ -59,13 +62,14 @@ export function buildIslandGroundTexture(
   c.height = size;
   const ctx = c.getContext('2d')!;
 
-  const grassHex =
-    season === 'spring'
+  const grassHex = snowy
+    ? region.palette.grassWinter
+    : season === 'spring'
       ? region.palette.grassSpring
       : season === 'autumn'
         ? region.palette.grassAutumn
         : season === 'winter'
-          ? region.palette.grassWinter
+          ? '#92b070'
           : region.palette.grassSummer;
 
   ctx.fillStyle = grassHex;
@@ -83,10 +87,12 @@ export function buildIslandGroundTexture(
     const x = rand() * size;
     const y = rand() * size;
     const r = 1.5 + rand() * 3.5;
-    if (season === 'winter') {
+    if (snowy) {
       ctx.fillStyle = rand() > 0.45 ? 'rgba(225,222,212,0.55)' : 'rgba(255,253,247,0.55)';
     } else if (season === 'autumn') {
       ctx.fillStyle = rand() > 0.4 ? 'rgba(164,132,74,0.34)' : 'rgba(220,188,118,0.28)';
+    } else if (season === 'winter') {
+      ctx.fillStyle = rand() > 0.35 ? 'rgba(116,144,82,0.26)' : 'rgba(218,214,175,0.30)';
     } else {
       ctx.fillStyle = rand() > 0.3 ? 'rgba(122,155,78,0.28)' : 'rgba(242,232,165,0.42)';
     }
@@ -100,7 +106,7 @@ export function buildIslandGroundTexture(
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     // Road shadow/mud edge
-    ctx.strokeStyle = season === 'winter' ? '#beb5a2' : '#9c8f76';
+    ctx.strokeStyle = snowy ? '#beb5a2' : '#9c8f76';
     ctx.lineWidth = ((widthUnits + 0.35) / (ISLAND_HALF * 2)) * size;
     ctx.beginPath();
     pts.forEach(([wx, wz], idx) => {
@@ -110,7 +116,7 @@ export function buildIslandGroundTexture(
     ctx.stroke();
 
     // Inner road bed
-    ctx.strokeStyle = season === 'winter' ? '#ded8c8' : region.palette.dirtPath;
+    ctx.strokeStyle = snowy ? '#ded8c8' : region.palette.dirtPath;
     ctx.lineWidth = (widthUnits / (ISLAND_HALF * 2)) * size;
     ctx.stroke();
     ctx.restore();
@@ -139,7 +145,7 @@ export function buildIslandGroundTexture(
     // Carve brook & duck pond bank bed
     ctx.save();
     ctx.lineCap = 'round';
-    ctx.strokeStyle = season === 'winter' ? '#a5b5b8' : '#7b897a';
+    ctx.strokeStyle = snowy ? '#a5b5b8' : '#7b897a';
     ctx.lineWidth = (2.2 / (ISLAND_HALF * 2)) * size;
     ctx.beginPath();
     ctx.moveTo(toPx(4.8), toPx(-11.2));
@@ -147,7 +153,7 @@ export function buildIslandGroundTexture(
     ctx.quadraticCurveTo(toPx(-1.8), toPx(6.2), toPx(-0.8), toPx(11.2));
     ctx.stroke();
 
-    ctx.fillStyle = season === 'winter' ? '#a5b5b8' : '#7b897a';
+    ctx.fillStyle = snowy ? '#a5b5b8' : '#7b897a';
     ctx.beginPath();
     ctx.ellipse(toPx(-1.5), toPx(6.6), toPx(-1.5 + 3.2) - toPx(-1.5), toPx(6.6 + 2.5) - toPx(6.6), 0, 0, Math.PI * 2);
     ctx.fill();
@@ -197,7 +203,7 @@ export function buildIslandGroundTexture(
           ((pw + 0.3) / (ISLAND_HALF * 2)) * size,
           ((ph + 0.3) / (ISLAND_HALF * 2)) * size,
         );
-        ctx.fillStyle = season === 'winter' ? '#b8d0d6' : season === 'autumn' ? '#d4b85b' : '#b7cb66';
+        ctx.fillStyle = snowy ? '#b8d0d6' : season === 'autumn' ? '#d4b85b' : '#b7cb66';
         ctx.fillRect(
           toPx(px),
           toPx(pz),
@@ -225,12 +231,12 @@ export function buildIslandGroundTexture(
       if (g.kind === 'farmland') {
         fillPoly(
           g.points,
-          season === 'winter' ? '#b8d0d6' : season === 'autumn' ? '#d4b85b' : '#b5c966',
+          snowy ? '#b8d0d6' : season === 'autumn' ? '#d4b85b' : '#b5c966',
         );
       } else if (g.kind === 'wood') {
         fillPoly(
           g.points,
-          season === 'winter'
+          snowy
             ? 'rgba(210,214,210,0.72)'
             : season === 'autumn'
               ? 'rgba(182,134,62,0.72)'
@@ -239,7 +245,7 @@ export function buildIslandGroundTexture(
       } else {
         fillPoly(
           g.points,
-          season === 'winter'
+          snowy
             ? 'rgba(224,224,218,0.68)'
             : season === 'autumn'
               ? 'rgba(196,156,86,0.65)'
@@ -249,7 +255,7 @@ export function buildIslandGroundTexture(
     }
 
     // 2. OSM lakes, rivers & canals bank rims
-    const bankCol = season === 'winter' ? '#a5b5b8' : '#7b897a';
+    const bankCol = snowy ? '#a5b5b8' : '#7b897a';
     for (const w of osm.waters) {
       if (w.isPolygon) {
         fillPoly(w.points, bankCol);
@@ -276,7 +282,7 @@ export function buildIslandGroundTexture(
       ctx.save();
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = season === 'winter' ? '#b8b09e' : '#a49880';
+      ctx.strokeStyle = snowy ? '#b8b09e' : '#a49880';
       ctx.lineWidth = ((rd.width + 0.28) / (ISLAND_HALF * 2)) * size;
       ctx.beginPath();
       rd.points.forEach(([wx, wz], idx) => {
@@ -287,10 +293,10 @@ export function buildIslandGroundTexture(
 
       ctx.strokeStyle =
         rd.kind === 'footway'
-          ? season === 'winter'
+          ? snowy
             ? '#e2ded2'
             : '#dfd5bf'
-          : season === 'winter'
+          : snowy
             ? '#dcd8cc'
             : '#cbc3b2';
       ctx.lineWidth = (rd.width / (ISLAND_HALF * 2)) * size;
@@ -317,7 +323,7 @@ export function buildIslandGroundTexture(
     );
 
     // Warm crescent sandy beach curve along SE cove
-    ctx.fillStyle = season === 'winter' ? '#dcd8cc' : '#ebd6a3';
+    ctx.fillStyle = snowy ? '#dcd8cc' : '#ebd6a3';
     ctx.beginPath();
     ctx.moveTo(toPx(-4.0), toPx(11.2));
     ctx.quadraticCurveTo(toPx(-3.4), toPx(1.7), toPx(2.8), toPx(1.25));
@@ -327,7 +333,7 @@ export function buildIslandGroundTexture(
     ctx.fill();
 
     // Rich turquoise cove seabed (matches 3D water shape)
-    ctx.fillStyle = season === 'winter' ? '#a3bdc4' : '#3a98ad';
+    ctx.fillStyle = snowy ? '#a3bdc4' : '#3a98ad';
     ctx.beginPath();
     ctx.moveTo(toPx(-3.2), toPx(11.2));
     ctx.quadraticCurveTo(toPx(-2.7), toPx(2.5), toPx(2.8), toPx(2.0));
@@ -361,7 +367,7 @@ export function buildIslandGroundTexture(
     }
   } else {
     // Otaru stone wharf quays flanking straight canal x=0
-    ctx.fillStyle = season === 'winter' ? '#cbd0d4' : '#aeb3b8';
+    ctx.fillStyle = snowy ? '#cbd0d4' : '#aeb3b8';
     ctx.fillRect(toPx(-4.2), 0, (8.4 / (ISLAND_HALF * 2)) * size, size);
     ctx.fillStyle = '#6c7c88';
     ctx.fillRect(toPx(-1.55), 0, (3.1 / (ISLAND_HALF * 2)) * size, size);
@@ -601,6 +607,12 @@ export class DioramaEngine {
     });
   }
 
+  isSnowyGround(): boolean {
+    if (this.weather === 'snow') return true;
+    if (this.season !== 'winter') return false;
+    return !this.region.mildWinter;
+  }
+
   getState() {
     let buildings = this.region.osmData?.buildings.length ?? 0;
     let nature = 0;
@@ -618,6 +630,8 @@ export class DioramaEngine {
       timeMode: this.timeMode,
       weather: this.weather,
       renderStyle: this.renderStyle,
+      mildWinter: Boolean(this.region.mildWinter),
+      isSnowyGround: this.isSnowyGround(),
       activeSpecialSceneId: this.activeSpecialSceneId,
       toolMode: this.toolMode,
       selectedCatalogId: this.selectedCatalogId,
@@ -695,7 +709,8 @@ export class DioramaEngine {
     for (const tex of this.osmTextures) tex.dispose();
     this.osmTextures = [];
 
-    this.groundTex = buildIslandGroundTexture(this.region, this.season);
+    const snowy = this.isSnowyGround();
+    this.groundTex = buildIslandGroundTexture(this.region, this.season, snowy);
     this.cliffTex = buildCliffTexture(this.region);
 
     this.groundMat = new THREE.MeshLambertMaterial({
@@ -727,7 +742,7 @@ export class DioramaEngine {
     this.islandGroup.add(baseMesh);
 
     // Translucent Ice / Water Overlay + Waterfall Cascade & Hanging Winter Icicles
-    const isFrozen = this.season === 'winter';
+    const isFrozen = snowy;
     this.waterMat = new THREE.MeshLambertMaterial({
       color: isFrozen ? this.region.palette.iceTop : this.region.palette.waterTop,
       transparent: true,
@@ -1116,7 +1131,13 @@ export class DioramaEngine {
 
     for (const p of this.region.placements) {
       if (!CATALOG_MAP.has(p.catalogId)) continue;
-      const asset = this.models.createInstance(p.catalogId, this.region, this.season, this.uniforms);
+      const asset = this.models.createInstance(
+        p.catalogId,
+        this.region,
+        this.season,
+        this.uniforms,
+        this.isSnowyGround(),
+      );
       asset.root.position.set(p.x, 0, p.z);
       asset.root.rotation.y = p.rotY;
       asset.root.userData.placementId = p.id;
@@ -1161,6 +1182,7 @@ export class DioramaEngine {
       this.region,
       this.season,
       this.uniforms,
+      this.isSnowyGround(),
     );
     ghostAsset.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
@@ -1179,8 +1201,8 @@ export class DioramaEngine {
   }
 
   private applyAtmosphere(): void {
-    const isWinter = this.season === 'winter';
-    this.uniforms.uSnowCoverage.value = isWinter ? 1.0 : 0.0;
+    const isSnowy = this.isSnowyGround();
+    this.uniforms.uSnowCoverage.value = isSnowy ? 1.0 : 0.0;
 
     let sunCol = '#fff1d8';
     let sunInt = 1.68;
@@ -1301,35 +1323,38 @@ export class DioramaEngine {
         this.region.id === 'sydney' &&
         (this.season === 'summer' || this.season === 'spring') &&
         this.weather === 'breeze';
-      const showPart =
-        this.weather === 'snow' ||
-        this.weather === 'rain' ||
-        isWinter ||
-        this.season === 'autumn' ||
-        this.season === 'spring' ||
-        isJacarandaBreeze;
-      this.weatherPoints.visible =
-        showPart && (this.weather !== 'clear' || this.season !== 'summer' || isJacarandaBreeze);
       if (this.weather === 'snow') {
+        this.weatherPoints.visible = true;
         this.weatherMat.color.set('#ffffff');
         this.weatherMat.size = 0.19;
         this.weatherMat.opacity = 0.88;
       } else if (this.weather === 'rain') {
+        this.weatherPoints.visible = true;
         this.weatherMat.color.set('#a8d4eb');
         this.weatherMat.size = 0.14;
         this.weatherMat.opacity = 0.72;
       } else if (isJacarandaBreeze) {
+        this.weatherPoints.visible = true;
         this.weatherMat.color.set('#bca0f5');
         this.weatherMat.size = 0.16;
         this.weatherMat.opacity = 0.8;
-      } else if (this.season === 'autumn') {
+      } else if (isSnowy && this.weather === 'breeze') {
+        this.weatherPoints.visible = true;
+        this.weatherMat.color.set('#ffffff');
+        this.weatherMat.size = 0.16;
+        this.weatherMat.opacity = 0.62;
+      } else if (this.season === 'autumn' && this.weather === 'breeze') {
+        this.weatherPoints.visible = true;
         this.weatherMat.color.set('#e08a42');
         this.weatherMat.size = 0.16;
         this.weatherMat.opacity = 0.75;
-      } else {
+      } else if (this.season === 'spring' && this.weather === 'breeze') {
+        this.weatherPoints.visible = true;
         this.weatherMat.color.set('#f8d7df');
         this.weatherMat.size = 0.15;
-        this.weatherMat.opacity = 0.70;
+        this.weatherMat.opacity = 0.7;
+      } else {
+        this.weatherPoints.visible = false;
       }
     }
     for (const r of this.breezeRibbons) {
@@ -1406,7 +1431,35 @@ export class DioramaEngine {
 
   setWeather(w: WeatherId): void {
     this.clearSpecialSceneLayer();
+    const prevSnowy = this.isSnowyGround();
     this.weather = w;
+    if (this.isSnowyGround() !== prevSnowy) {
+      this.rebuildIslandGeometry();
+      this.rebuildPlacedModels();
+      this.rebuildGhostPreview();
+    }
+    this.applyAtmosphere();
+    this.onStateChanged?.();
+  }
+
+  applyLiveWeather(live: LiveWeatherReport): void {
+    this.clearSpecialSceneLayer();
+    const prevSeason = this.season;
+    const prevSnowy = this.isSnowyGround();
+
+    this.weather = live.weather;
+    this.season = live.suggestedSeason;
+    this.region.liveTempC = live.tempC;
+    if (this.region.id === 'custom') {
+      this.region.mildWinter = computeMildWinter(this.region.lat, live);
+    }
+    this.region.badgeText = `${this.region.lat.toFixed(2)}, ${this.region.lon.toFixed(2)} · 实况 ${live.summary}`;
+
+    if (this.season !== prevSeason || this.isSnowyGround() !== prevSnowy) {
+      this.rebuildIslandGeometry();
+      this.rebuildPlacedModels();
+      this.rebuildGhostPreview();
+    }
     this.applyAtmosphere();
     this.onStateChanged?.();
   }
@@ -1433,12 +1486,13 @@ export class DioramaEngine {
     this.activeSpecialSceneId = sp.id;
 
     const seasonChanged = this.season !== sp.season;
+    const prevSnowy = this.isSnowyGround();
     this.season = sp.season;
     this.timeMode = sp.timeMode;
     this.weather = sp.weather;
     this.manualEclipseOffset = null;
 
-    if (seasonChanged) {
+    if (seasonChanged || this.isSnowyGround() !== prevSnowy) {
       this.rebuildIslandGeometry();
       this.rebuildPlacedModels();
       this.rebuildGhostPreview();
@@ -1447,7 +1501,13 @@ export class DioramaEngine {
     if (this.modelsLoaded && sp.extraPlacements) {
       for (const ep of sp.extraPlacements) {
         if (!CATALOG_MAP.has(ep.catalogId)) continue;
-        const asset = this.models.createInstance(ep.catalogId, this.region, this.season, this.uniforms);
+        const asset = this.models.createInstance(
+          ep.catalogId,
+          this.region,
+          this.season,
+          this.uniforms,
+          this.isSnowyGround(),
+        );
         asset.root.position.set(ep.x, 0, ep.z);
         asset.root.rotation.y = ep.rotY;
         asset.root.scale.setScalar(0.25);
@@ -1611,7 +1671,13 @@ export class DioramaEngine {
       z,
       rotY,
     };
-    const asset = this.models.createInstance(catalogId, this.region, this.season, this.uniforms);
+    const asset = this.models.createInstance(
+      catalogId,
+      this.region,
+      this.season,
+      this.uniforms,
+      this.isSnowyGround(),
+    );
     asset.root.position.set(x, 0, z);
     asset.root.rotation.y = rotY;
     asset.root.userData.placementId = data.id;

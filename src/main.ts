@@ -182,7 +182,11 @@ function bootstrap(): void {
           : st.timeMode === 'night'
             ? ' · 夜'
             : '';
-      weatherPill.textContent = `${SEASON_LABELS[st.season]} · ${WEATHER_LABELS[st.weather]}${timeTag}`;
+      const seasonTag =
+        st.season === 'winter' && st.region.mildWinter && !st.isSnowyGround
+          ? '暖冬'
+          : SEASON_LABELS[st.season];
+      weatherPill.textContent = `${seasonTag} · ${WEATHER_LABELS[st.weather]}${timeTag}`;
     }
     if (placedCountPill) placedCountPill.textContent = `共 ${st.placedCount} 处可改建`;
 
@@ -220,6 +224,8 @@ function bootstrap(): void {
       timeMode: st.timeMode,
       weather: st.weather,
       renderStyle: st.renderStyle,
+      mildWinter: st.mildWinter,
+      isSnowyGround: st.isSnowyGround,
       activeSpecialSceneId: st.activeSpecialSceneId,
       toolMode: st.toolMode,
       placedCount: st.placedCount,
@@ -447,9 +453,7 @@ function bootstrap(): void {
     btnSyncLive.textContent = '⏳ 同步中...';
     try {
       const live = await fetchLiveWeather(st.region.lat, st.region.lon);
-      engine.setWeather(live.weather);
-      engine.setSeason(live.suggestedSeason);
-      if (locSub) locSub.textContent = `${st.region.lat.toFixed(2)}, ${st.region.lon.toFixed(2)} · 实况 ${live.summary}`;
+      engine.applyLiveWeather(live);
       playChimeSound();
     } catch {
       // ignore fallback cleanly

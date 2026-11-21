@@ -294,15 +294,15 @@ export class ModelLibrary {
     ]);
   }
 
-  private resolveGlbKey(catalogId: string, season: SeasonId): string | null {
+  private resolveGlbKey(catalogId: string, season: SeasonId, snowy: boolean): string | null {
     const item = CATALOG_MAP.get(catalogId);
     if (!item || item.kind !== 'glb' || !item.glbKey) return null;
     if (catalogId === 'tree_common' || catalogId === 'tree_birch' || catalogId === 'tree_willow') {
-      const sfx = season === 'winter' ? 'winter' : season === 'autumn' ? 'autumn' : 'summer';
+      const sfx = snowy ? 'winter' : season === 'autumn' ? 'autumn' : 'summer';
       return `${catalogId}_${sfx}`;
     }
     if (catalogId === 'tree_pine') {
-      return season === 'winter' ? 'tree_pine_winter' : 'tree_pine_summer';
+      return snowy ? 'tree_pine_winter' : 'tree_pine_summer';
     }
     return item.glbKey;
   }
@@ -312,15 +312,18 @@ export class ModelLibrary {
     region: RegionBlueprint,
     season: SeasonId,
     uniforms: WorldShaderUniforms,
+    snowy?: boolean,
   ): InstantiatedAsset {
     const item = CATALOG_MAP.get(catalogId);
     if (!item) throw new Error(`Unknown catalog item: ${catalogId}`);
 
+    const useSnowy = snowy ?? (season === 'winter' && !region.mildWinter);
+
     if (item.kind === 'bespoke') {
-      return this.createBespoke(catalogId, region, season, uniforms, item.defaultScaleHeight);
+      return this.createBespoke(catalogId, region, season, uniforms, item.defaultScaleHeight, useSnowy);
     }
 
-    const glbKey = this.resolveGlbKey(catalogId, season);
+    const glbKey = this.resolveGlbKey(catalogId, season, useSnowy);
     if (!glbKey) throw new Error(`Missing glbKey for ${catalogId}`);
     const gltf = this.gltfCache.get(glbKey);
     if (!gltf) throw new Error(`Missing cached GLB: ${glbKey}`);
@@ -503,6 +506,7 @@ export class ModelLibrary {
     season: SeasonId,
     uniforms: WorldShaderUniforms,
     targetHeight: number,
+    snowy: boolean,
   ): InstantiatedAsset {
     const raw = new THREE.Group();
     let pointLight: THREE.PointLight | undefined;
@@ -832,7 +836,7 @@ export class ModelLibrary {
         raw.add(br);
       }
 
-      if (season === 'winter') {
+      if (snowy) {
         const frost = mkMat('#d9d4cb', { snowCap: true });
         for (const [cx, cy, cz, r] of [
           [0, 1.72, 0, 0.42],
@@ -847,9 +851,11 @@ export class ModelLibrary {
         }
       } else {
         const shades =
-          season === 'autumn'
-            ? ['#8c7a62', '#9a7ea6', '#7a825b']
-            : ['#8e6cd6', '#a98ae8', '#7655bf', '#c0a7f5'];
+          season === 'winter'
+            ? ['#7c9e64', '#6d8f58', '#8cae70']
+            : season === 'autumn'
+              ? ['#8c7a62', '#9a7ea6', '#7a825b']
+              : ['#8e6cd6', '#a98ae8', '#7655bf', '#c0a7f5'];
         const puffMats = shades.map((h) => mkMat(h, { snowCap: false }));
         const clusters: Array<[number, number, number, number]> = [
           [0, 1.88, 0, 0.68],

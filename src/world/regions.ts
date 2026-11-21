@@ -56,6 +56,8 @@ export interface RegionBlueprint {
   defaultTime: TimeMode;
   waterLayout: WaterLayoutId;
   hasPaddies: boolean;
+  mildWinter?: boolean;
+  liveTempC?: number;
   palette: PaletteOverrides;
   placements: PlacedItemData[];
   fieldNotes: Record<SeasonId, string>;
@@ -106,6 +108,7 @@ export const PRESET_REGIONS: Record<Exclude<RegionId, 'custom'>, RegionBlueprint
     defaultTime: 'day',
     waterLayout: 'harbour_bay',
     hasPaddies: false,
+    mildWinter: true,
     palette: {
       ...SHARED_STORYBOOK_PALETTE,
       grassSpring: '#9ac474',
@@ -466,9 +469,44 @@ export function cloneBlueprint(bp: RegionBlueprint): RegionBlueprint {
   };
 }
 
+export function getCalendarSeason(lat: number, date = new Date()): SeasonId {
+  const mmdd = (date.getMonth() + 1) * 100 + date.getDate();
+  let northSeason: SeasonId;
+  if (mmdd >= 204 && mmdd < 505) northSeason = 'spring';
+  else if (mmdd >= 505 && mmdd < 807) northSeason = 'summer';
+  else if (mmdd >= 807 && mmdd < 1107) northSeason = 'autumn';
+  else northSeason = 'winter';
+
+  if (lat >= 0) return northSeason;
+  const flipMap: Record<SeasonId, SeasonId> = {
+    spring: 'autumn',
+    summer: 'winter',
+    autumn: 'spring',
+    winter: 'summer',
+  };
+  return flipMap[northSeason];
+}
+
+export function computeMildWinter(
+  lat: number,
+  live?: LiveWeatherReport,
+  date = new Date(),
+): boolean {
+  const absLat = Math.abs(lat);
+  if (live && (live.weather === 'snow' || live.tempC <= 4)) return false;
+  if (absLat < 26) return true;
+  if (absLat <= 36) {
+    if (getCalendarSeason(lat, date) === 'winter' && live) {
+      return live.tempC >= 10;
+    }
+    return absLat < 28;
+  }
+  return false;
+}
+
 export async function fetchLiveWeather(lat: number, lon: number): Promise<LiveWeatherReport> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 4500);
+  const timer = window.setTimeout(() => controller.abort(), 6500);
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&current=temperature_2m,weather_code,wind_speed_10m`;
     const res = await fetch(url, { signal: controller.signal });
@@ -494,11 +532,7 @@ export async function fetchLiveWeather(lat: number, lon: number): Promise<LiveWe
       weather = 'breeze';
     }
 
-    const month = new Date().getMonth(); // 0..11
-    let suggestedSeason: SeasonId = 'summer';
-    if (temp <= 4 || weather === 'snow') suggestedSeason = 'winter';
-    else if (temp <= 14) suggestedSeason = month >= 8 && month <= 10 ? 'autumn' : 'spring';
-    else suggestedSeason = month >= 2 && month <= 4 ? 'spring' : 'summer';
+    const suggestedSeason: SeasonId = getCalendarSeason(lat);
 
     const labelMap: Record<WeatherId, string> = {
       clear: '晴朗',
@@ -536,12 +570,15 @@ export function buildCustomBlueprint(
 ): RegionBlueprint {
   const absLat = Math.abs(lat);
   const isSubtropicalAsia = lat > 18 && lat < 36 && lon > 95 && lon < 130;
-  const isCold = absLat > 48 || (live?.tempC !== undefined && live.tempC <= 4);
+  const calendarSeason = getCalendarSeason(lat);
+  const mildWinter = computeMildWinter(lat, live);
+  const isCold =
+    (live?.tempC !== undefined && live.tempC <= 4) ||
+    live?.weather === 'snow' ||
+    (absLat > 48 && calendarSeason === 'winter');
 
-  const defaultSeason: SeasonId =
-    live?.suggestedSeason ?? (isCold ? 'winter' : isSubtropicalAsia ? 'summer' : 'autumn');
-  const defaultWeather: WeatherId =
-    live?.weather ?? (isCold ? 'snow' : 'breeze');
+  const defaultSeason: SeasonId = live?.suggestedSeason ?? calendarSeason;
+  const defaultWeather: WeatherId = live?.weather ?? (isCold ? 'snow' : 'breeze');
 
   const ns = lat >= 0 ? 'N' : 'S';
   const ew = lon >= 0 ? 'E' : 'W';
@@ -682,6 +719,8 @@ export function buildCustomBlueprint(
       defaultTime: 'day',
       waterLayout: 'osm_custom',
       hasPaddies: hasFarm,
+      mildWinter,
+      liveTempC: live?.tempC,
       palette: {
         ...SHARED_STORYBOOK_PALETTE,
         roofTone: isSubtropicalAsia ? '#596978' : isCold ? '#6b7d90' : '#b8765c',
@@ -693,14 +732,16 @@ export function buildCustomBlueprint(
         spring: `春景实景：${summaryText}`,
         summer: `夏景实景：${summaryText}`,
         autumn: `秋景实景：${summaryText}`,
-        winter: `冬景实景：${summaryText}`,
+        winter: mildWinter
+          ? `暖冬常青实景（${live ? `${live.tempC}°C` : '亚热带暖冬'}，不结冰落雪；可手动切「飘雪」体验）：${summaryText}`
+          : `冬景实景：${summaryText}`,
       },
       specialScenes: [
         {
           id: 'street_fair',
           icon: '🎪',
           label: '街头市集',
-          season: defaultSeason === 'winter' ? 'spring' : defaultSeason,
+          season: defaultSeason === 'winter' && !mildWinter ? 'spring' : defaultSeason,
           timeMode: 'day',
           weather: 'breeze',
           note: '街头市集限定切片：街口临时添置露天茶摊、木箱货摊与休闲长椅。',
@@ -763,6 +804,8 @@ export function buildCustomBlueprint(
     defaultTime: 'day',
     waterLayout,
     hasPaddies: isSubtropicalAsia,
+    mildWinter,
+    liveTempC: live?.tempC,
     palette: {
       ...SHARED_STORYBOOK_PALETTE,
       roofTone: isSubtropicalAsia ? '#596978' : isCold ? '#6b7d90' : '#b8765c',
@@ -770,7 +813,14 @@ export function buildCustomBlueprint(
       carStyle: isSubtropicalAsia ? 'blue' : 'cream',
     },
     placements,
-    fieldNotes: { ...basePreset.fieldNotes },
+    fieldNotes: {
+      ...basePreset.fieldNotes,
+      ...(mildWinter
+        ? {
+            winter: `暖冬常青风貌（${live ? `${live.tempC}°C` : '亚热带暖冬'}，保持常绿与流动水系；可手动切换「飘雪」体验）。`,
+          }
+        : {}),
+    },
     specialScenes: basePreset.specialScenes.map((s) => ({
       ...s,
       extraPlacements: s.extraPlacements?.map((ep) => ({ ...ep })),
