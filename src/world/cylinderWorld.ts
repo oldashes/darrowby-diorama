@@ -4,16 +4,67 @@ import {
   attachStorybookSurfaceShader,
 } from '../assets/modelLibrary';
 import { RegionBlueprint, RegionId, SeasonId, TimeMode } from './regions';
-import { Collider2D, DoorwayTarget } from './playerController';
+import type { Collider2D, DoorwayTarget } from './playerController';
 
 export type ViewMode = 'space' | 'ground' | 'interior' | 'plot';
-export type GroundLookPreset = 'street' | 'sky' | 'walk';
+export type GroundLookPreset = 'street' | 'sky' | 'bridge' | 'endcap' | 'walk';
 export type ContinentStripId = 0 | 1 | 2;
 
 export const CYLINDER_RADIUS = 320;
-export const CYLINDER_LENGTH = 1100;
-const CYLINDER_CENTER_Z = -210; // spans z in [-760, +340]
+export const CYLINDER_LENGTH = 500;
+const CYLINDER_CENTER_Z = 10; // barrel spans z in [-240, +260]; north endcap [-420,-240], south [+260,+440]
+export const CYLINDER_CIRCUMFERENCE = 2 * Math.PI * CYLINDER_RADIUS;
+export const ENDCAP_Z_START = -240;
+export const ENDCAP_DEPTH = 180; // apex zero-G hub at z = -420
+export const CYLINDER_OMEGA = Math.sqrt(19.5 / CYLINDER_RADIUS); // ~0.24685 rad/s -> 1.00 G at R=320
 const STRIP_ARC_HALF = (40 * Math.PI) / 180; // 80° continent strips alternating with 40° sky bays
+
+export function wrapArcS(s: number): number {
+  const half = CYLINDER_CIRCUMFERENCE * 0.5;
+  return ((((s + half) % CYLINDER_CIRCUMFERENCE) + CYLINDER_CIRCUMFERENCE) % CYLINDER_CIRCUMFERENCE) - half;
+}
+
+export function arcDeg360(arcS: number): number {
+  const d = ((wrapArcS(arcS) / CYLINDER_RADIUS) * 180) / Math.PI;
+  return ((d % 360) + 360) % 360;
+}
+
+export function isInSkylightBay(arcS: number): boolean {
+  const d = arcDeg360(arcS);
+  return (d > 40.2 && d < 79.8) || (d > 160.2 && d < 199.8) || (d > 280.2 && d < 319.8);
+}
+
+export function getCylinderZoneLabel(arcS: number, z: number): string {
+  if (z < ENDCAP_Z_START) {
+    if (z <= ENDCAP_Z_START - ENDCAP_DEPTH + 10) return '零重力轴心枢纽';
+    return '北端盖半球爬坡区';
+  }
+  const d = arcDeg360(arcS);
+  if (d <= 40 || d >= 320) return '大陆带 A · 达罗比谷';
+  if (d < 80) return '玻璃天窗栈桥 A';
+  if (d <= 160) return '大陆带 B · 滨海高城';
+  if (d < 200) return '玻璃天窗栈桥 B';
+  if (d <= 280) return '大陆带 C · 古城风车区';
+  return '玻璃天窗栈桥 C';
+}
+
+export function endcapFloorY(z: number): number {
+  if (z >= ENDCAP_Z_START) return 0;
+  const u = Math.min(0.9999, Math.max(0, (ENDCAP_Z_START - z) / ENDCAP_DEPTH));
+  return CYLINDER_RADIUS * (1 - Math.sqrt(1 - u * u));
+}
+
+export function endcapGravityFactor(z: number): number {
+  if (z >= ENDCAP_Z_START) return 1;
+  const u = Math.min(1, Math.max(0, (ENDCAP_Z_START - z) / ENDCAP_DEPTH));
+  return Math.sqrt(Math.max(0, 1 - u * u));
+}
+
+export function endcapSlopeAngle(z: number): number {
+  if (z >= ENDCAP_Z_START) return 0;
+  const u = Math.min(0.985, Math.max(0, (ENDCAP_Z_START - z) / ENDCAP_DEPTH));
+  return Math.atan2(CYLINDER_RADIUS * u, ENDCAP_DEPTH * Math.sqrt(1 - u * u));
+}
 
 export interface ContinentStripDef {
   id: ContinentStripId;
@@ -207,20 +258,20 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 export function groundBowlY(x: number, z: number): number {
   const sinT = Math.min(0.999, Math.abs(x) / CYLINDER_RADIUS);
   const cylY = CYLINDER_RADIUS * (1 - Math.sqrt(1 - sinT * sinT));
-  const r = Math.hypot(x, z);
-  const blend = smoothstep(52, 130, r);
-  return -0.045 + (cylY + 0.045) * blend;
+  const boxEdge = Math.max(Math.abs(x), Math.abs(z));
+  const blend = smoothstep(11.5, 24, boxEdge);
+  const axial = z < ENDCAP_Z_START ? endcapFloorY(z) : 0;
+  return -0.045 + (cylY + 0.045) * blend + axial;
 }
 
-/** Lateral banking angle (radians) matching the O'Neill valley curvature when running up flanks. */
-export function groundBowlSlopeTilt(x: number, z: number): number {
-  const blend = smoothstep(52, 130, Math.hypot(x, z));
-  return Math.atan2(x, CYLINDER_RADIUS) * blend * 0.65;
+/** In co-rotating O'Neill gravity, ground feels locally flat everywhere on the barrel; only axial endcap tilts. */
+export function groundBowlSlopeTilt(_x: number, _z: number): number {
+  return 0;
 }
 
 function buildBottomValleyStripGeometry(arcHalf: number, length: number, radius: number): THREE.BufferGeometry {
-  const segAng = 32;
-  const segZ = 44;
+  const segAng = 48;
+  const segZ = 40;
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
@@ -238,8 +289,7 @@ function buildBottomValleyStripGeometry(arcHalf: number, length: number, radius:
 
       const s = Math.sin(theta);
       const c = Math.cos(theta);
-      const r = Math.hypot(x, z);
-      const b = smoothstep(52, 130, r);
+      const b = smoothstep(11.5, 24, Math.max(Math.abs(x), Math.abs(z)));
       normals.push(-s * b, c * b + (1 - b), 0);
       uvs.push(u, 1 - v);
     }
@@ -253,6 +303,105 @@ function buildBottomValleyStripGeometry(arcHalf: number, length: number, radius:
       const d = (iz + 1) * stride + ia;
       const e = d + 1;
       // Right-handed inward facing (+Y upward)
+      indices.push(a, d, b, b, d, e);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function buildEndcapDomeGeometry(north: boolean, radius: number, depth: number): THREE.BufferGeometry {
+  const segPhi = 48;
+  const segAng = 54;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const baseZ = north ? ENDCAP_Z_START : ENDCAP_Z_START + CYLINDER_LENGTH;
+  const dir = north ? -1 : 1;
+
+  for (let ip = 0; ip <= segPhi; ip++) {
+    const phi = (ip / segPhi) * Math.PI * 0.5;
+    const u = Math.sin(phi);
+    const rFactor = Math.cos(phi);
+    const r = radius * rFactor;
+    const z = baseZ + dir * u * depth;
+    const alpha = Math.atan2(radius * u, depth * Math.max(0.02, rFactor));
+    const ca = Math.cos(alpha);
+    const sa = Math.sin(alpha);
+    for (let ia = 0; ia <= segAng; ia++) {
+      const th = (ia / segAng) * Math.PI * 2;
+      const s = Math.sin(th);
+      const c = Math.cos(th);
+      positions.push(r * s, radius - r * c, z);
+      normals.push(-s * ca, c * ca, north ? sa : -sa);
+      uvs.push(0.5 + 0.5 * rFactor * s, 0.5 - 0.5 * rFactor * c);
+    }
+  }
+
+  const stride = segAng + 1;
+  for (let ip = 0; ip < segPhi; ip++) {
+    for (let ia = 0; ia < segAng; ia++) {
+      const a = ip * stride + ia;
+      const b = a + 1;
+      const d = (ip + 1) * stride + ia;
+      const e = d + 1;
+      if (north) {
+        indices.push(a, b, d, b, e, d);
+      } else {
+        indices.push(a, d, b, b, d, e);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function buildSkyBridgeDeckGeometry(
+  thetaCenter: number,
+  arcHalf: number,
+  zMin: number,
+  zMax: number,
+  radius: number,
+  segAng = 20,
+  segZ = 6,
+): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let iz = 0; iz <= segZ; iz++) {
+    const v = iz / segZ;
+    const z = zMin + v * (zMax - zMin);
+    for (let ia = 0; ia <= segAng; ia++) {
+      const u = ia / segAng;
+      const th = thetaCenter - arcHalf + u * arcHalf * 2;
+      const s = Math.sin(th);
+      const c = Math.cos(th);
+      positions.push(radius * s, radius - radius * c, z);
+      normals.push(-s, c, 0);
+      uvs.push(u, v);
+    }
+  }
+
+  const stride = segAng + 1;
+  for (let iz = 0; iz < segZ; iz++) {
+    for (let ia = 0; ia < segAng; ia++) {
+      const a = iz * stride + ia;
+      const b = a + 1;
+      const d = (iz + 1) * stride + ia;
+      const e = d + 1;
       indices.push(a, d, b, b, d, e);
     }
   }
@@ -491,18 +640,31 @@ function buildSkyVaultTexture(isNight: boolean): THREE.CanvasTexture {
 
   if (!isNight) {
     const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0.0, '#7ebce0');
-    g.addColorStop(0.45, '#b6dcef');
-    g.addColorStop(1.0, '#e6eff0');
+    g.addColorStop(0.0, '#1f4470');
+    g.addColorStop(0.45, '#467eb0');
+    g.addColorStop(1.0, '#8ec2de');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-    for (let i = 0; i < 10; i++) {
+    // Delicate orbital mirror lattice & faint high-altitude day stars outside skylight glass
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+    let s = 2311;
+    const rnd = () => {
+      s = (s * 16807) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+    for (let i = 0; i < 110; i++) {
+      ctx.beginPath();
+      ctx.arc(rnd() * w, rnd() * h, rnd() > 0.85 ? 1.5 : 0.85, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+    for (let i = 0; i < 8; i++) {
       const cx = (i * 97 + 40) % w;
       const cy = (i * 53 + 35) % h;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, 46 + (i % 3) * 18, 13 + (i % 2) * 5, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy, 46 + (i % 3) * 18, 12 + (i % 2) * 5, 0, 0, Math.PI * 2);
       ctx.fill();
     }
   } else {
@@ -541,31 +703,45 @@ function buildEndcapTexture(isNight: boolean): THREE.CanvasTexture {
 
   const g = ctx.createRadialGradient(cx, cy, 18, cx, cy, size * 0.5);
   if (isNight) {
-    g.addColorStop(0.0, '#9bd6ff');
-    g.addColorStop(0.24, '#243554');
-    g.addColorStop(0.75, '#172238');
-    g.addColorStop(1.0, '#0f182a');
+    g.addColorStop(0.0, '#72c9f0');
+    g.addColorStop(0.24, '#1b2b47');
+    g.addColorStop(0.75, '#121d33');
+    g.addColorStop(1.0, '#0b1322');
   } else {
-    g.addColorStop(0.0, '#eef7fc');
-    g.addColorStop(0.22, '#bdd4e3');
-    g.addColorStop(0.65, '#c7cfbf');
-    g.addColorStop(1.0, '#aeb9b0');
+    g.addColorStop(0.0, '#85d6ec');
+    g.addColorStop(0.18, '#5ea1c8');
+    g.addColorStop(0.45, '#8db17f');
+    g.addColorStop(1.0, '#6b9459');
   }
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
 
-  // Subtle concentric architectural rings (inspired by Spinward Endcap horizon!)
-  ctx.strokeStyle = isNight ? 'rgba(130, 175, 225, 0.28)' : 'rgba(105, 118, 128, 0.25)';
-  for (let r = 34; r < 252; r += 26) {
-    ctx.lineWidth = r < 90 ? 3 : 1.5;
+  // Align 3 conservatory skylight bays (60°, 180°, 300°) & 3 parkland ribs (0°, 120°, 240°) with barrel strips
+  for (const bayDeg of [60, 180, 300]) {
+    const a0 = Math.PI * 0.5 - ((bayDeg + 20) * Math.PI) / 180;
+    const a1 = Math.PI * 0.5 - ((bayDeg - 20) * Math.PI) / 180;
+    ctx.fillStyle = isNight ? 'rgba(10, 18, 36, 0.72)' : 'rgba(42, 92, 138, 0.72)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, size * 0.495, a0, a1);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Terraced concentric promenade rings + structural dome ribs
+  ctx.strokeStyle = isNight ? 'rgba(130, 195, 245, 0.42)' : 'rgba(242, 232, 205, 0.55)';
+  for (let r = 28; r < 252; r += 22) {
+    ctx.lineWidth = r < 76 ? 3.2 : 1.8;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
   }
-  for (let i = 0; i < 12; i++) {
-    const a = (i * Math.PI) / 6;
+  ctx.strokeStyle = isNight ? 'rgba(160, 210, 255, 0.35)' : 'rgba(235, 224, 192, 0.5)';
+  ctx.lineWidth = 2.0;
+  for (let i = 0; i < 18; i++) {
+    const a = (i * Math.PI) / 9;
     ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * 32, cy + Math.sin(a) * 32);
+    ctx.moveTo(cx + Math.cos(a) * 26, cy + Math.sin(a) * 26);
     ctx.lineTo(cx + Math.cos(a) * 252, cy + Math.sin(a) * 252);
     ctx.stroke();
   }
@@ -613,7 +789,7 @@ export class GroundBackdropWorld {
   };
 
   constructor(
-    parentScene: THREE.Scene,
+    parentScene: THREE.Object3D,
     private uniforms: WorldShaderUniforms,
   ) {
     this.floorMat = new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true });
@@ -652,11 +828,11 @@ export class GroundBackdropWorld {
   }
 
   private buildSkyVault(): void {
-    // 1. Outer Skylight Sky Shell (R = 348, 64 segs -> stays strictly outside Strip 0 hillsides everywhere!)
+    // 1. Outer Skylight Sky Shell (R = 348) spanning full cylinder + both endcaps
     const skyGeo = new THREE.CylinderGeometry(
       CYLINDER_RADIUS + 28,
       CYLINDER_RADIUS + 28,
-      CYLINDER_LENGTH + 40,
+      CYLINDER_LENGTH + ENDCAP_DEPTH * 2 + 40,
       64,
       1,
       true,
@@ -666,13 +842,13 @@ export class GroundBackdropWorld {
     skyMesh.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z);
     this.vaultGroup.add(skyMesh);
 
-    // 2. Bottom Valley Strip (Strip 0): seamlessly flat underfoot (y = -0.045), curving upward into sides & hills!
+    // 2. Bottom Valley Strip (Strip 0): seamlessly flat underfoot across core & curving into barrel flanks
     const bottomGeo = buildBottomValleyStripGeometry(STRIP_ARC_HALF, CYLINDER_LENGTH, CYLINDER_RADIUS);
     const bottomMesh = new THREE.Mesh(bottomGeo, this.floorMat);
     bottomMesh.receiveShadow = true;
     this.vaultGroup.add(bottomMesh);
 
-    // 3. Upper-Left & Upper-Right Overhead Inverted Continent Strips (120° & 240°) with colorful city-skyline relief
+    // 3. Overhead Continent Strips (120° & 240°) with colorful city-skyline relief
     const towerPal = ['#d6c9b4', '#c97e68', '#7d92a4', '#e3d8c0', '#b89f78'];
     [1, 2].forEach((stripId, idx) => {
       const thetaCenter = CONTINENT_STRIPS[stripId].theta;
@@ -683,8 +859,7 @@ export class GroundBackdropWorld {
       const mesh = new THREE.Mesh(geo, mat);
       this.vaultGroup.add(mesh);
 
-      // 1-draw-call InstancedMesh low-poly megacity blocks overhead with colored rooftops/walls!
-      const count = 200;
+      const count = 160;
       const blockGeo = new THREE.BoxGeometry(6.8, 1, 6.8);
       const blockMat = this.mkMat('#ffffff', { isWindow: false });
       const inst = new THREE.InstancedMesh(blockGeo, blockMat, count);
@@ -699,8 +874,8 @@ export class GroundBackdropWorld {
         const side = k % 2 === 0 ? 1 : -1;
         const angOff = side * (0.14 + rnd() * (STRIP_ARC_HALF - 0.16));
         const th = thetaCenter + angOff;
-        const zz = CYLINDER_CENTER_Z - 420 + rnd() * 760;
-        const bh = 8 + rnd() * 30;
+        const zz = ENDCAP_Z_START + 16 + rnd() * (CYLINDER_LENGTH - 36);
+        const bh = 8 + rnd() * 28;
         const rad = CYLINDER_RADIUS - bh * 0.5;
         dummy.position.set(rad * Math.sin(th), CYLINDER_RADIUS - rad * Math.cos(th), zz);
         dummy.rotation.set(0, 0, th);
@@ -715,31 +890,113 @@ export class GroundBackdropWorld {
       this.vaultGroup.add(inst);
     });
 
-    // 4. Slender Skylight Margin Trim ONLY on upper overhead continent edges (leaves lower valley horizon open!)
+    // 4. Three Walkable Translucent Glass Sky-Bridges spanning the 40° skylight bays (60°, 180°, 300°)
+    const glassMat = new THREE.MeshLambertMaterial({
+      color: '#9ce0fa',
+      transparent: true,
+      opacity: 0.44,
+      side: THREE.DoubleSide,
+    });
+    const ribMat = this.mkMat('#d8ccb2');
+    const railGlowMat = this.mkMat('#ffd87a', { isLantern: true });
+    for (const bayDeg of [60, 180, 300]) {
+      const thBay = (bayDeg * Math.PI) / 180;
+      const spanHalf = (21.5 * Math.PI) / 180;
+      const deckGeo = buildSkyBridgeDeckGeometry(thBay, spanHalf, -22, 22, CYLINDER_RADIUS - 0.08, 22, 6);
+      const deck = new THREE.Mesh(deckGeo, glassMat);
+      deck.receiveShadow = true;
+      this.vaultGroup.add(deck);
+
+      // Transverse structural glass-mullion beams & illuminated railings along z = ±21.8
+      for (let m = -4; m <= 4; m++) {
+        const th = thBay + (m / 4.2) * spanHalf;
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.45, 44.5), ribMat);
+        beam.position.set((CYLINDER_RADIUS - 0.16) * Math.sin(th), CYLINDER_RADIUS - (CYLINDER_RADIUS - 0.16) * Math.cos(th), 0);
+        beam.rotation.z = th;
+        this.vaultGroup.add(beam);
+      }
+      for (const rz of [-21.8, 21.8]) {
+        const railGeo = buildSkyBridgeDeckGeometry(thBay, spanHalf, rz - 0.28, rz + 0.28, CYLINDER_RADIUS - 1.15, 22, 1);
+        const rail = new THREE.Mesh(railGeo, railGlowMat);
+        this.vaultGroup.add(rail);
+      }
+    }
+
+    // 5. Skylight Margin Trim on continent borders
     const rimMat = this.mkMat('#8b9ba8');
-    for (const s of [CONTINENT_STRIPS[1], CONTINENT_STRIPS[2]]) {
+    for (const s of CONTINENT_STRIPS) {
       for (const edge of [-STRIP_ARC_HALF, STRIP_ARC_HALF]) {
         const th = s.theta + edge;
-        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, CYLINDER_LENGTH), rimMat);
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, CYLINDER_LENGTH), rimMat);
         rim.position.set(CYLINDER_RADIUS * Math.sin(th), CYLINDER_RADIUS * (1 - Math.cos(th)), CYLINDER_CENTER_Z);
         rim.rotation.z = th;
         this.vaultGroup.add(rim);
       }
     }
 
-    // 5. Distant Circular Conservatory Endcap Horizon + Suspended Zero-G Hub Wheel (z = -755)
-    const endcap = new THREE.Mesh(new THREE.CircleGeometry(CYLINDER_RADIUS + 8, 48), this.endcapMat);
-    endcap.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z - CYLINDER_LENGTH * 0.5 + 10);
-    this.vaultGroup.add(endcap);
+    // 6. True Parametric 3D Hemispherical North Endcap (z = -240 -> -420) & Symmetric South Endcap (+260 -> +440)
+    const northDome = new THREE.Mesh(buildEndcapDomeGeometry(true, CYLINDER_RADIUS, ENDCAP_DEPTH), this.endcapMat);
+    northDome.receiveShadow = true;
+    this.vaultGroup.add(northDome);
 
+    const southDome = new THREE.Mesh(buildEndcapDomeGeometry(false, CYLINDER_RADIUS, ENDCAP_DEPTH), this.endcapMat);
+    this.vaultGroup.add(southDome);
+
+    // 7. Three Golden Climb Promenades on the North Endcap up to the Zero-G Hub (0°, 120°, 240°)
+    const rampMat = this.mkMat('#d8be8a');
+    const rampEdgeMat = this.mkMat('#6c8c62');
+    const archMat = this.mkMat('#ffdc85', { isLantern: true });
+    for (const s of CONTINENT_STRIPS) {
+      const segs = 36;
+      for (let i = 0; i < segs; i++) {
+        const phi0 = (i / segs) * Math.PI * 0.49;
+        const phi1 = ((i + 1) / segs) * Math.PI * 0.49;
+        const phiM = (phi0 + phi1) * 0.5;
+        const u0 = Math.sin(phi0);
+        const u1 = Math.sin(phi1);
+        const um = Math.sin(phiM);
+        const rMid = CYLINDER_RADIUS * Math.cos(phiM) - 0.14;
+        const zMid = ENDCAP_Z_START - um * ENDCAP_DEPTH;
+        const dz = (u1 - u0) * ENDCAP_DEPTH;
+        const dr = CYLINDER_RADIUS * (Math.cos(phi0) - Math.cos(phi1));
+        const tileLen = Math.hypot(dz, dr) + 0.35;
+        const pitch = Math.atan2(dr, dz);
+
+        const tile = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.36, tileLen), rampMat);
+        const pivot = new THREE.Group();
+        pivot.position.set(rMid * Math.sin(s.theta), CYLINDER_RADIUS - rMid * Math.cos(s.theta), zMid);
+        pivot.rotation.z = s.theta;
+        const tiltGroup = new THREE.Group();
+        tiltGroup.rotation.x = pitch;
+        tiltGroup.add(tile);
+        if (i % 2 === 0) {
+          for (const ex of [-2.55, 2.55]) {
+            const curb = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.52, tileLen), rampEdgeMat);
+            curb.position.x = ex;
+            tiltGroup.add(curb);
+          }
+        }
+        if (i > 0 && i % 3 === 0 && s.id === 0) {
+          const arch = new THREE.Mesh(new THREE.TorusGeometry(3.4, 0.28, 6, 16, Math.PI), archMat);
+          arch.position.y = 0.2;
+          tiltGroup.add(arch);
+        }
+        pivot.add(tiltGroup);
+        this.vaultGroup.add(pivot);
+      }
+    }
+
+    // 8. Suspended Zero-G Hub Wheel & Glowing Core Beacon at North Endcap Apex (z = -419.2, y = R = 320)
     const hub = new THREE.Group();
-    hub.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z - CYLINDER_LENGTH * 0.5 + 22);
+    hub.position.set(0, CYLINDER_RADIUS, ENDCAP_Z_START - ENDCAP_DEPTH + 0.8);
     const hubMat = this.mkMat('#d8ccb2');
     const hubGlow = this.mkMat('#ffe6a3', { isLantern: true });
-    hub.add(new THREE.Mesh(new THREE.TorusGeometry(64, 4.2, 8, 36), hubMat));
-    hub.add(new THREE.Mesh(new THREE.TorusGeometry(28, 2.8, 6, 24), hubGlow));
+    const zeroCoreMat = this.mkMat('#52e3c8', { isLantern: true });
+    hub.add(new THREE.Mesh(new THREE.TorusGeometry(26, 2.2, 8, 36), hubMat));
+    hub.add(new THREE.Mesh(new THREE.TorusGeometry(15, 1.6, 6, 28), zeroCoreMat));
+    hub.add(new THREE.Mesh(new THREE.OctahedronGeometry(3.8, 1), hubGlow));
     for (let i = 0; i < 4; i++) {
-      const sp = new THREE.Mesh(new THREE.BoxGeometry(3.5, 128, 3.5), hubMat);
+      const sp = new THREE.Mesh(new THREE.BoxGeometry(1.8, 52, 1.8), hubMat);
       sp.rotation.z = (i * Math.PI) / 4;
       hub.add(sp);
     }
@@ -764,7 +1021,7 @@ export class GroundBackdropWorld {
       ship.add(env, fin, gond);
       const bx = i === 0 ? -42 : 55;
       const by = i === 0 ? 115 : 155;
-      const bz = i === 0 ? -210 : -340;
+      const bz = i === 0 ? -150 : -215;
       ship.position.set(bx, by, bz);
       this.dynamicGroup.add(ship);
       this.airships.push({ group: ship, baseX: bx, baseY: by, baseZ: bz, speed: 0.14 + i * 0.06, phase: i * 2.4 });
@@ -903,8 +1160,8 @@ export class GroundBackdropWorld {
     const slopePal = ['#ede4d0', '#d28168', '#c8b896', '#72899c'];
     for (let i = 0; i < slopeCount; i++) {
       const sign = i % 2 === 0 ? -1 : 1;
-      const sx = sign * (56 + rnd() * 129);
-      const sz = -440 + rnd() * 490;
+      const sx = sign * (30 + rnd() * 155);
+      const sz = -232 + rnd() * 390;
       const sy = groundBowlY(sx, sz);
       const tilt = Math.atan2(sx, CYLINDER_RADIUS);
       sdum.position.set(sx, sy + 1.0, sz);

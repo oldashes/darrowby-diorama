@@ -38,6 +38,7 @@ declare global {
     undoLastPlacement?: () => boolean;
     setMoveInput?: (right: number, forward: number, sprint?: boolean) => void;
     triggerJumpOrGlide?: () => string;
+    throwCoriolisBall?: () => void;
     teleportPlayer?: (x: number, z: number) => void;
     interactNearbyDoor?: () => boolean;
     getDioramaStats?: () => ReturnType<DioramaEngine['getState']>;
@@ -78,6 +79,7 @@ function bootstrap(): void {
   const fieldNote = document.getElementById('field-note');
   const legendRow = document.getElementById('legend-row');
   const weatherPill = document.getElementById('weather-pill');
+  const physicsPill = document.getElementById('physics-pill');
   const placedCountPill = document.getElementById('placed-count-pill');
   const buildHint = document.getElementById('build-hint');
 
@@ -95,6 +97,7 @@ function bootstrap(): void {
   const zeldaControls = document.getElementById('zelda-controls');
   const moveJoystick = document.getElementById('move-joystick');
   const joyKnob = document.getElementById('joy-knob');
+  const btnThrowBall = document.getElementById('btn-throw-ball');
   const btnSprintToggle = document.getElementById('btn-sprint-toggle');
   const btnJumpGlide = document.getElementById('btn-jump-glide');
   const doorPrompt = document.getElementById('door-prompt');
@@ -184,9 +187,35 @@ function bootstrap(): void {
     }
   }
 
+  let lastPhysicsLabel = '';
+  function updatePhysicsPill(st: ReturnType<DioramaEngine['getState']>): void {
+    if (!physicsPill || (st.viewMode !== 'ground' && st.viewMode !== 'interior')) return;
+    const gStr = st.isZeroG ? '🫧 0.00 G' : `${st.effectiveG.toFixed(2)} G`;
+    const corNote =
+      Math.abs(st.coriolisLandingOffsetX) > 0.15
+        ? ` · ⚾偏转 ${st.coriolisLandingOffsetX >= 0 ? '+' : ''}${st.coriolisLandingOffsetX.toFixed(1)}m`
+        : st.coriolisShiftG > 0.04
+          ? ' · ⚡顺转增重'
+          : st.coriolisShiftG < -0.04
+            ? ' · 🪶逆转减重'
+            : '';
+    const angStr = st.viewMode === 'ground' ? ` (${Math.round(st.barrelAngleDeg)}°)` : '';
+    const nextLabel = `${gStr} · ${st.zoneLabel}${angStr}${corNote}`;
+    if (nextLabel !== lastPhysicsLabel) {
+      lastPhysicsLabel = nextLabel;
+      physicsPill.textContent = nextLabel;
+    }
+    physicsPill.classList.toggle('zero-g', st.isZeroG);
+    physicsPill.classList.toggle(
+      'coriolis-shift',
+      !st.isZeroG && Math.abs(st.coriolisShiftG) > 0.04,
+    );
+  }
+
   function syncHud(): void {
     const st = engine.getState();
     const view = st.viewMode;
+    updatePhysicsPill(st);
     const isLightPaper =
       st.renderStyle === 'pocket' &&
       view !== 'space' &&
@@ -279,12 +308,12 @@ function bootstrap(): void {
     } else if (view === 'ground') {
       if (locName) locName.textContent = `${st.region.name}（平地视角）`;
       if (locSub) {
-        locSub.textContent = `${st.region.badgeText} · 第三人称自由奔跑 · 可攀上 R=320m 谷坡滑翔`;
+        locSub.textContent = `${st.region.badgeText} · 360° 共转平地 · 可经栈桥环游与登端盖入 0G 枢纽`;
       }
       if (fieldNote) {
         fieldNote.textContent =
           activeSpecial?.note ||
-          'WASD / 左摇杆自由走跑，Shift 冲刺，Space / 跳键起跳（空中再按展开滑翔伞）；走近闪烁门标按 E 进屋。';
+          'WASD / 摇杆自由走跑（顺转增重 / 逆转减重），Space 跳伞，T 垂直抛棒球测科里奥利偏转，近门按 E 进屋。';
       }
       if (legendRow) {
         const parts = [
@@ -371,6 +400,8 @@ function bootstrap(): void {
 
     const showZeldaHud = view === 'ground' || view === 'interior';
     zeldaControls?.classList.toggle('hidden', !showZeldaHud);
+    physicsPill?.classList.toggle('hidden', !showZeldaHud);
+    btnThrowBall?.classList.toggle('hidden', view !== 'ground');
     btnSprintToggle?.classList.toggle('active', st.sprintToggled);
 
     if (doorPrompt) {
@@ -396,6 +427,14 @@ function bootstrap(): void {
       playerX: st.playerX,
       playerY: st.playerY,
       playerZ: st.playerZ,
+      arcS: st.arcS,
+      barrelAngleDeg: st.barrelAngleDeg,
+      effectiveG: st.effectiveG,
+      coriolisShiftG: st.coriolisShiftG,
+      zoneLabel: st.zoneLabel,
+      isZeroG: st.isZeroG,
+      coriolisLandingOffsetX: st.coriolisLandingOffsetX,
+      coriolisActive: st.coriolisActive,
       playerFacing: st.playerFacing,
       playerSpeed: st.playerSpeed,
       grounded: st.grounded,
@@ -538,6 +577,7 @@ function bootstrap(): void {
     engine.setMoveInput(r, f, Boolean(s));
   };
   window.triggerJumpOrGlide = () => engine.triggerJumpOrGlide();
+  window.throwCoriolisBall = () => engine.throwCoriolisBall();
   window.teleportPlayer = (x, z) => engine.teleportPlayer(x, z);
   window.interactNearbyDoor = () => engine.interactNearbyDoor();
 
@@ -833,6 +873,12 @@ function bootstrap(): void {
   moveJoystick?.addEventListener('pointerup', endJoystick);
   moveJoystick?.addEventListener('pointercancel', endJoystick);
 
+  btnThrowBall?.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    playUiTick();
+    engine.throwCoriolisBall();
+  });
+
   btnSprintToggle?.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     playUiTick();
@@ -965,6 +1011,11 @@ function bootstrap(): void {
         }
         return;
       }
+      if (k === 't' && !e.repeat && mode === 'ground') {
+        playUiTick();
+        engine.throwCoriolisBall();
+        return;
+      }
       if (k === 'escape') {
         scenePopover?.classList.add('hidden');
         regionModal?.classList.add('hidden');
@@ -1082,9 +1133,11 @@ function bootstrap(): void {
       if (btnJumpGlide) {
         const label =
           stNow.viewMode === 'ground' && !stNow.grounded
-            ? stNow.isGliding
-              ? '收伞'
-              : '🪂 滑翔'
+            ? stNow.isZeroG
+              ? '🫧 漂浮'
+              : stNow.isGliding
+                ? '收伞'
+                : '🪂 滑翔'
             : '⬆️ 跳';
         if (label !== lastJumpLabel) {
           lastJumpLabel = label;
@@ -1098,10 +1151,20 @@ function bootstrap(): void {
 
     // Keep lightweight live stats fresh during motion/gliding tests
     const stPost = engine.getState();
+    updatePhysicsPill(stPost);
+
     if (window.__stats) {
       window.__stats.playerX = stPost.playerX;
       window.__stats.playerY = stPost.playerY;
       window.__stats.playerZ = stPost.playerZ;
+      window.__stats.arcS = stPost.arcS;
+      window.__stats.barrelAngleDeg = stPost.barrelAngleDeg;
+      window.__stats.effectiveG = stPost.effectiveG;
+      window.__stats.coriolisShiftG = stPost.coriolisShiftG;
+      window.__stats.zoneLabel = stPost.zoneLabel;
+      window.__stats.isZeroG = stPost.isZeroG;
+      window.__stats.coriolisLandingOffsetX = stPost.coriolisLandingOffsetX;
+      window.__stats.coriolisActive = stPost.coriolisActive;
       window.__stats.fpYaw = stPost.fpYaw;
       window.__stats.fpPitch = stPost.fpPitch;
       window.__stats.inYaw = stPost.inYaw;

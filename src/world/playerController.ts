@@ -1,5 +1,17 @@
 import * as THREE from 'three';
 import { WorldShaderUniforms, attachStorybookSurfaceShader } from '../assets/modelLibrary';
+import {
+  CYLINDER_OMEGA,
+  CYLINDER_RADIUS,
+  ENDCAP_DEPTH,
+  ENDCAP_Z_START,
+  endcapFloorY,
+  endcapGravityFactor,
+  endcapSlopeAngle,
+  getCylinderZoneLabel,
+  isInSkylightBay,
+  wrapArcS,
+} from './cylinderWorld';
 
 export type Collider2D =
   | { kind: 'circle'; x: number; z: number; r: number }
@@ -23,6 +35,12 @@ export interface PlayerStateSnapshot {
   x: number;
   y: number;
   z: number;
+  arcS: number;
+  barrelAngleDeg: number;
+  effectiveG: number;
+  coriolisShiftG: number;
+  zoneLabel: string;
+  isZeroG: boolean;
   facingYaw: number;
   speed: number;
   grounded: boolean;
@@ -373,8 +391,14 @@ function resolveColliders(
  */
 export class PlayerController {
   readonly avatar: TravelerAvatar;
-  readonly pos = new THREE.Vector3(-0.4, 0, 2.2);
+  readonly pos = new THREE.Vector3(0, 0, 2.2);
   readonly vel = new THREE.Vector3();
+
+  /** Circumferential coordinate (meters) along the O'Neill R=320 barrel when outdoors. */
+  arcS = -0.4;
+  effectiveG = 1.0;
+  coriolisShiftG = 0.0;
+  isZeroG = false;
 
   facingYaw = Math.PI;
   grounded = true;
@@ -418,8 +442,8 @@ export class PlayerController {
   }
 
   triggerJumpOrGlide(allowGlide: boolean): 'jump' | 'glide_open' | 'glide_close' | 'none' {
-    if (this.grounded) {
-      this.vel.y = this.isInteriorMode ? 5.6 : 7.8;
+    if (this.grounded || this.isZeroG) {
+      this.vel.y = this.isInteriorMode ? 5.6 : this.isZeroG ? 3.2 : 7.8;
       this.grounded = false;
       this.isGliding = false;
       return 'jump';
@@ -431,11 +455,35 @@ export class PlayerController {
     return 'none';
   }
 
-  teleport(x: number, z: number, groundY: number, facingYaw = Math.PI, isInterior = false): void {
+  getCylinderFloorY(arcS: number, z: number): number {
+    if (z < ENDCAP_Z_START) return endcapFloorY(z);
+    const boxEdge = Math.max(Math.abs(arcS), Math.abs(z));
+    const t = Math.max(0, Math.min(1, (boxEdge - 11.5) / 12.5));
+    const s = t * t * (3 - 2 * t);
+    return -0.045 * (1 - s);
+  }
+
+  teleport(arcOrX: number, z: number, groundY: number, facingYaw = Math.PI, isInterior = false): void {
     this.isInteriorMode = isInterior;
-    this.pos.set(x, groundY, z);
+    if (isInterior) {
+      this.arcS = 0;
+      this.pos.set(arcOrX, groundY, z);
+      this.effectiveG = 1.0;
+      this.coriolisShiftG = 0.0;
+      this.isZeroG = false;
+      this.avatar.root.rotation.x = 0;
+    } else {
+      this.arcS = wrapArcS(arcOrX);
+      const y = this.getCylinderFloorY(this.arcS, z);
+      this.pos.set(0, Number.isFinite(groundY) ? Math.max(y, groundY) : y, z);
+      const baseG = endcapGravityFactor(z);
+      this.isZeroG = baseG <= 0.15;
+      this.effectiveG = this.isZeroG ? 0.0 : baseG;
+      this.coriolisShiftG = 0;
+      this.avatar.root.rotation.x = this.isZeroG ? 0.18 : endcapSlopeAngle(z) * 0.85;
+    }
     this.vel.set(0, 0, 0);
-    this.grounded = true;
+    this.grounded = !this.isZeroG;
     this.isGliding = false;
     this.heightAboveGround = 0;
     this.facingYaw = facingYaw;
@@ -444,10 +492,18 @@ export class PlayerController {
   }
 
   getSnapshot(): PlayerStateSnapshot {
+    const rawDeg = ((this.arcS / CYLINDER_RADIUS) * 180) / Math.PI;
+    const barrelAngleDeg = ((rawDeg % 360) + 360) % 360;
     return {
-      x: this.pos.x,
+      x: this.isInteriorMode ? this.pos.x : 0,
       y: this.pos.y,
       z: this.pos.z,
+      arcS: this.isInteriorMode ? 0 : this.arcS,
+      barrelAngleDeg: this.isInteriorMode ? 0 : barrelAngleDeg,
+      effectiveG: this.effectiveG,
+      coriolisShiftG: this.coriolisShiftG,
+      zoneLabel: this.isInteriorMode ? '室内空间 · 1.00 G' : getCylinderZoneLabel(this.arcS, this.pos.z),
+      isZeroG: this.isZeroG,
       facingYaw: this.facingYaw,
       speed: Math.hypot(this.vel.x, this.vel.z),
       grounded: this.grounded,
@@ -462,7 +518,7 @@ export class PlayerController {
     cameraYaw: number,
     bounds: RoomBounds,
     getGroundY: (x: number, z: number) => number,
-    getSlopeTilt: (x: number, z: number) => number,
+    _getSlopeTilt: (x: number, z: number) => number,
     colliders: readonly Collider2D[],
     allowGlide: boolean,
     isInterior: boolean,
@@ -478,61 +534,143 @@ export class PlayerController {
     const wishX = -sinY * this.inputForward + cosY * this.inputRight;
     const wishZ = -cosY * this.inputForward - sinY * this.inputRight;
 
-    const maxSpeed = isInterior
-      ? this.isSprinting
-        ? 5.0
-        : 3.3
-      : this.isGliding
-        ? 9.6
-        : this.isSprinting
-          ? 8.8
-          : 4.8;
-
-    const accel = this.grounded ? 18 : this.isGliding ? 5.5 : 8.0;
-    const targetVx = wishX * maxSpeed;
-    const targetVz = wishZ * maxSpeed;
-    const k = Math.min(1, dt * accel);
-    this.vel.x += (targetVx - this.vel.x) * k;
-    this.vel.z += (targetVz - this.vel.z) * k;
-
-    // Gravity / Paraglider descent
-    if (!allowGlide) {
+    if (isInterior) {
+      const maxSpeed = this.isSprinting ? 5.0 : 3.3;
+      const accel = this.grounded ? 18 : 8.0;
+      const k = Math.min(1, dt * accel);
+      this.vel.x += (wishX * maxSpeed - this.vel.x) * k;
+      this.vel.z += (wishZ * maxSpeed - this.vel.z) * k;
       this.isGliding = false;
-    }
-    this.vel.y -= 19.5 * dt;
-    if (this.isGliding && this.vel.y < -1.85) {
-      this.vel.y = -1.85;
-    }
+      this.vel.y -= 19.5 * dt;
+      this.effectiveG = 1.0;
+      this.coriolisShiftG = 0.0;
+      this.isZeroG = false;
 
-    const nextX = this.pos.x + this.vel.x * dt;
-    const nextZ = this.pos.z + this.vel.z * dt;
-    const radius = isInterior ? 0.42 : 0.36;
-    const [rx, rz] = resolveColliders(nextX, nextZ, radius, colliders, bounds);
+      const nextX = this.pos.x + this.vel.x * dt;
+      const nextZ = this.pos.z + this.vel.z * dt;
+      const [rx, rz] = resolveColliders(nextX, nextZ, 0.42, colliders, bounds);
+      if (Math.abs(rx - nextX) > 0.001) this.vel.x *= 0.25;
+      if (Math.abs(rz - nextZ) > 0.001) this.vel.z *= 0.25;
+      this.pos.x = rx;
+      this.pos.z = rz;
 
-    // Zero velocity along blocked axes if pushed back noticeably
-    if (Math.abs(rx - nextX) > 0.001) this.vel.x *= 0.25;
-    if (Math.abs(rz - nextZ) > 0.001) this.vel.z *= 0.25;
-    this.pos.x = rx;
-    this.pos.z = rz;
-
-    this.pos.y += this.vel.y * dt;
-    const floorY = getGroundY(this.pos.x, this.pos.z);
-
-    if (this.pos.y <= floorY + 0.005 && this.vel.y <= 0) {
-      this.pos.y = floorY;
-      this.vel.y = 0;
-      this.grounded = true;
-      this.isGliding = false;
-    } else if (this.pos.y <= floorY + 0.18 && this.grounded && this.vel.y <= 0) {
-      // Snap tightly while walking down smooth cylinder hillside
-      this.pos.y = floorY;
-      this.vel.y = 0;
-      this.grounded = true;
+      this.pos.y += this.vel.y * dt;
+      const floorY = getGroundY(this.pos.x, this.pos.z);
+      if (this.pos.y <= floorY + 0.005 && this.vel.y <= 0) {
+        this.pos.y = floorY;
+        this.vel.y = 0;
+        this.grounded = true;
+      } else {
+        this.grounded = false;
+      }
+      this.heightAboveGround = Math.max(0, this.pos.y - floorY);
+      this.avatar.root.rotation.x = 0;
     } else {
-      this.grounded = false;
-    }
+      // Co-rotating O'Neill cylinder physics (x=0 locally; arcS wraps cleanly modulo 2πR)
+      const isNearTown = Math.abs(this.arcS) < 22 && this.pos.z > -22;
+      const maxSpeed = this.isGliding
+        ? 16.0
+        : this.isSprinting
+          ? isNearTown
+            ? 9.5
+            : 22.0
+          : isNearTown
+            ? 5.2
+            : 9.6;
 
-    this.heightAboveGround = Math.max(0, this.pos.y - floorY);
+      const accel = this.isZeroG ? 4.2 : this.grounded ? 18 : this.isGliding ? 5.5 : 7.5;
+      const k = Math.min(1, dt * accel);
+      this.vel.x += (wishX * maxSpeed - this.vel.x) * k;
+      this.vel.z += (wishZ * maxSpeed - this.vel.z) * k;
+
+      if (!allowGlide) this.isGliding = false;
+
+      const baseG = endcapGravityFactor(this.pos.z);
+      this.isZeroG = baseG <= 0.15;
+
+      if (this.isZeroG) {
+        this.coriolisShiftG = 0;
+        this.effectiveG = 0;
+        this.isGliding = false;
+        const targetHover = 1.6 + Math.sin(simTime * 1.6) * 0.45;
+        const floorHub = endcapFloorY(this.pos.z);
+        const alt = this.pos.y - floorHub;
+        this.vel.y += ((targetHover - alt) * 2.2 - this.vel.y * 1.8) * dt;
+        this.grounded = false;
+      } else {
+        // Real rotating-frame vertical Coriolis shift: spinward (+vel.x) increases apparent G; anti-spinward lowers it
+        this.coriolisShiftG = (2 * CYLINDER_OMEGA * this.vel.x) / 19.5;
+        this.effectiveG = Math.max(0.05, baseG + this.coriolisShiftG);
+        this.vel.y -= this.effectiveG * 19.5 * dt;
+
+        // Airborne Coriolis horizontal deflection: ax = +2ω * vy
+        if (!this.grounded) {
+          this.vel.x += 2 * CYLINDER_OMEGA * this.vel.y * dt;
+        }
+        const glideCap = -1.85 * Math.max(0.4, Math.sqrt(baseG));
+        if (this.isGliding && this.vel.y < glideCap) {
+          this.vel.y = glideCap;
+        }
+      }
+
+      const candArcS = wrapArcS(this.arcS + this.vel.x * dt);
+      let nextArcS = candArcS;
+      let nextZ = this.pos.z + this.vel.z * dt;
+
+      // Glass Sky-Bridge guardrails across the three 40° skylight bays (z ∈ [-20.5, +20.5] on barrel)
+      const zMin = ENDCAP_Z_START - ENDCAP_DEPTH;
+      const zMax = 118;
+      nextZ = Math.max(zMin, Math.min(zMax, nextZ));
+      if (nextZ > ENDCAP_Z_START + 2) {
+        const wasBay = isInSkylightBay(this.arcS);
+        const nowBay = isInSkylightBay(nextArcS);
+        if (!wasBay && nowBay && Math.abs(nextZ) > 20.5) {
+          nextArcS = this.arcS;
+          this.vel.x = 0;
+        } else if (wasBay) {
+          nextZ = Math.max(-20.5, Math.min(20.5, nextZ));
+        }
+      }
+
+      // Resolve Strip 0 neighborhood colliders cleanly around arcS=0
+      const activeColliders = Math.abs(nextArcS) < 42 && nextZ > -42 && nextZ < 42 ? colliders : [];
+      const cylBounds: RoomBounds = { minX: -10000, maxX: 10000, minZ: zMin, maxZ: zMax };
+      const [rx, rz] = resolveColliders(nextArcS, nextZ, 0.36, activeColliders, cylBounds);
+      if (Math.abs(rx - nextArcS) > 0.001) this.vel.x *= 0.25;
+      if (Math.abs(rz - nextZ) > 0.001) this.vel.z *= 0.25;
+
+      this.arcS = wrapArcS(rx);
+      this.pos.x = 0;
+      this.pos.z = rz;
+
+      this.pos.y += this.vel.y * dt;
+      const floorY = this.getCylinderFloorY(this.arcS, this.pos.z);
+
+      if (this.isZeroG) {
+        if (this.pos.y < floorY + 0.15) {
+          this.pos.y = floorY + 0.15;
+          if (this.vel.y < 0) this.vel.y = 0;
+        }
+        this.grounded = false;
+      } else if (this.pos.y <= floorY + 0.005 && this.vel.y <= 0) {
+        this.pos.y = floorY;
+        this.vel.y = 0;
+        this.grounded = true;
+        this.isGliding = false;
+      } else if (this.pos.y <= floorY + 0.24 && this.grounded && this.vel.y <= 0) {
+        // Snap tightly while climbing or descending the continuous curved hemispherical endcap
+        this.pos.y = floorY;
+        this.vel.y = 0;
+        this.grounded = true;
+      } else {
+        this.grounded = false;
+      }
+
+      this.heightAboveGround = Math.max(0, this.pos.y - floorY);
+      this.avatar.root.rotation.x = this.isZeroG
+        ? 0.18 + Math.sin(simTime * 1.4) * 0.12
+        : endcapSlopeAngle(this.pos.z) * 0.85;
+    }
 
     if (inputMag > 0.08 && Math.hypot(wishX, wishZ) > 1e-3) {
       const targetYaw = Math.atan2(wishX, wishZ);
@@ -543,14 +681,13 @@ export class PlayerController {
     this.avatar.bodyGroup.rotation.y = this.facingYaw;
 
     const horizSpeed = Math.hypot(this.vel.x, this.vel.z);
-    const slopeTilt = getSlopeTilt(this.pos.x, this.pos.z);
     this.avatar.animate(
       dt,
       horizSpeed,
       this.grounded,
       this.isGliding,
       this.isSprinting,
-      slopeTilt,
+      0,
       this.heightAboveGround,
       simTime,
     );
@@ -558,5 +695,207 @@ export class PlayerController {
 
   dispose(): void {
     this.avatar.dispose();
+  }
+}
+
+const TRAIL_MAX_POINTS = 220;
+
+/**
+ * Interactive 3D Coriolis Baseball simulation in the co-rotating O'Neill reference frame:
+ * launches straight upward from a vertical reference pole and traces real rotating-frame deflection
+ * (ax = +2ω·vy, ay = -g_eff - 2ω·vx) onto a highlighted landing marker.
+ */
+export class CoriolisBallSim {
+  readonly root = new THREE.Group();
+
+  private ballMesh: THREE.Mesh;
+  private poleTicks: THREE.InstancedMesh;
+  private trailPearls: THREE.InstancedMesh;
+  private launchPad: THREE.Mesh;
+  private landingRing: THREE.Mesh;
+  private trailLine: THREE.Line;
+  private trailPositions = new Float32Array(TRAIL_MAX_POINTS * 3);
+  private trailCount = 0;
+  private pearlCount = 0;
+  private lastPearlPos = new THREE.Vector3(0, -999, 0);
+  private readonly tickDummy = new THREE.Object3D();
+
+  private active = false;
+  private idleTimer = 0;
+  private launchArcS = 0;
+  private groundY = 0;
+  private localPos = new THREE.Vector3();
+  private vel = new THREE.Vector3();
+  lastLandingOffsetX = 0;
+
+  constructor(uniforms: WorldShaderUniforms) {
+    this.root.visible = false;
+
+    const ballMat = new THREE.MeshLambertMaterial({ color: '#ff5d38', flatShading: true });
+    attachStorybookSurfaceShader(ballMat, uniforms, { snowCap: false, isWindow: false, isLantern: true });
+    this.ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 10), ballMat);
+    this.root.add(this.ballMesh);
+
+    const poleMat = new THREE.MeshBasicMaterial({
+      color: '#ffe694',
+      transparent: true,
+      opacity: 0.72,
+    });
+    this.poleTicks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.055, 0.34, 0.055), poleMat, 14);
+    this.root.add(this.poleTicks);
+
+    const pearlMat = new THREE.MeshBasicMaterial({ color: '#ff8a4c' });
+    this.trailPearls = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 8, 6), pearlMat, 80);
+    this.trailPearls.count = 0;
+    this.root.add(this.trailPearls);
+
+    const padMat = new THREE.MeshBasicMaterial({ color: '#ffe082', side: THREE.DoubleSide });
+    this.launchPad = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.42, 20), padMat);
+    this.launchPad.rotation.x = -Math.PI * 0.5;
+    this.root.add(this.launchPad);
+
+    const landMat = new THREE.MeshBasicMaterial({ color: '#4fe3c1', side: THREE.DoubleSide });
+    this.landingRing = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.58, 24), landMat);
+    this.landingRing.rotation.x = -Math.PI * 0.5;
+    this.landingRing.visible = false;
+    this.root.add(this.landingRing);
+
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(this.trailPositions, 3));
+    trailGeo.setDrawRange(0, 0);
+    const trailMat = new THREE.LineBasicMaterial({ color: '#ffb074' });
+    this.trailLine = new THREE.Line(trailGeo, trailMat);
+    this.root.add(this.trailLine);
+  }
+
+  launch(arcS: number, groundY: number, z: number, playerArcS: number): void {
+    this.launchArcS = wrapArcS(arcS);
+    this.groundY = groundY;
+    const baseG = endcapGravityFactor(z);
+    const upSpeed = baseG <= 0.12 ? 6.5 : 14.5;
+    const gEst = Math.max(0.15, baseG) * 19.5;
+    const estApex = (upSpeed * upSpeed) / (2 * gEst);
+    const poleH = Math.min(11, Math.max(4.5, estApex + 0.8));
+
+    this.localPos.set(0, groundY + 1.25, z);
+    this.vel.set(0, upSpeed, 0);
+    this.active = true;
+    this.idleTimer = 0;
+    this.lastLandingOffsetX = 0;
+    this.root.visible = true;
+
+    for (let i = 0; i < 14; i++) {
+      const py = groundY + 0.4 + (i / 13) * poleH;
+      this.tickDummy.position.set(0, py, z);
+      this.tickDummy.rotation.set(0, 0, 0);
+      this.tickDummy.scale.set(1, 1, 1);
+      this.tickDummy.updateMatrix();
+      this.poleTicks.setMatrixAt(i, this.tickDummy.matrix);
+    }
+    this.poleTicks.instanceMatrix.needsUpdate = true;
+
+    this.launchPad.position.set(0, groundY + 0.05, z);
+    this.landingRing.visible = false;
+
+    this.trailCount = 0;
+    this.pearlCount = 0;
+    this.trailPearls.count = 0;
+    this.lastPearlPos.set(0, -999, 0);
+    this.pushTrailPoint(this.localPos);
+    this.syncWorldOffset(playerArcS);
+  }
+
+  clear(): void {
+    this.active = false;
+    this.root.visible = false;
+    this.landingRing.visible = false;
+    this.lastLandingOffsetX = 0;
+  }
+
+  isActive(): boolean {
+    return this.active;
+  }
+
+  private pushTrailPoint(p: THREE.Vector3): void {
+    if (this.trailCount < TRAIL_MAX_POINTS) {
+      const idx = this.trailCount * 3;
+      this.trailPositions[idx] = p.x;
+      this.trailPositions[idx + 1] = p.y;
+      this.trailPositions[idx + 2] = p.z;
+      this.trailCount++;
+      const attr = this.trailLine.geometry.getAttribute('position') as THREE.BufferAttribute;
+      attr.needsUpdate = true;
+      this.trailLine.geometry.setDrawRange(0, this.trailCount);
+    }
+    if (this.pearlCount < 80 && p.distanceTo(this.lastPearlPos) >= 0.42) {
+      this.tickDummy.position.copy(p);
+      this.tickDummy.rotation.set(0, 0, 0);
+      this.tickDummy.scale.set(1, 1, 1);
+      this.tickDummy.updateMatrix();
+      this.trailPearls.setMatrixAt(this.pearlCount, this.tickDummy.matrix);
+      this.pearlCount++;
+      this.trailPearls.count = this.pearlCount;
+      this.trailPearls.instanceMatrix.needsUpdate = true;
+      this.lastPearlPos.copy(p);
+    }
+  }
+
+  private syncWorldOffset(playerArcS: number): void {
+    this.root.position.x = wrapArcS(this.launchArcS - playerArcS);
+    this.ballMesh.position.copy(this.localPos);
+  }
+
+  step(dt: number, playerArcS: number): void {
+    if (!this.root.visible) return;
+    if (this.active) {
+      const steps = 4;
+      const sdt = Math.min(dt, 0.05) / steps;
+      for (let i = 0; i < steps; i++) {
+        const baseG = endcapGravityFactor(this.localPos.z);
+        const gAccel = 19.5 * Math.max(0.03, baseG);
+        const ax = 2 * CYLINDER_OMEGA * this.vel.y;
+        const ay = -gAccel - 2 * CYLINDER_OMEGA * this.vel.x;
+        this.vel.x += ax * sdt;
+        this.vel.y += ay * sdt;
+        this.localPos.x += this.vel.x * sdt;
+        this.localPos.y += this.vel.y * sdt;
+
+        if (this.localPos.y <= this.groundY + 0.2 && this.vel.y < 0) {
+          this.localPos.y = this.groundY + 0.2;
+          this.active = false;
+          this.lastLandingOffsetX = this.localPos.x;
+          this.landingRing.position.set(this.localPos.x, this.groundY + 0.06, this.localPos.z);
+          this.landingRing.rotation.x = -Math.PI * 0.5 + endcapSlopeAngle(this.localPos.z) * 0.85;
+          this.landingRing.visible = true;
+          this.pushTrailPoint(this.localPos);
+          break;
+        }
+      }
+      if (this.active) {
+        this.lastLandingOffsetX = this.localPos.x;
+        this.pushTrailPoint(this.localPos);
+      }
+    } else {
+      this.idleTimer += dt;
+      if (this.idleTimer > 12) {
+        this.root.visible = false;
+      }
+    }
+    this.syncWorldOffset(playerArcS);
+  }
+
+  dispose(): void {
+    this.ballMesh.geometry.dispose();
+    (this.ballMesh.material as THREE.Material).dispose();
+    this.poleTicks.geometry.dispose();
+    (this.poleTicks.material as THREE.Material).dispose();
+    this.trailPearls.geometry.dispose();
+    (this.trailPearls.material as THREE.Material).dispose();
+    this.launchPad.geometry.dispose();
+    (this.launchPad.material as THREE.Material).dispose();
+    this.landingRing.geometry.dispose();
+    (this.landingRing.material as THREE.Material).dispose();
+    this.trailLine.geometry.dispose();
+    (this.trailLine.material as THREE.Material).dispose();
   }
 }

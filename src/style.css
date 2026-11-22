@@ -253,6 +253,31 @@ html.clean-mode .modal-backdrop {
   font-weight: 600;
 }
 
+.physics-pill {
+  background: rgba(78, 168, 198, 0.16);
+  color: #82d9f2;
+  border: 1px solid rgba(110, 200, 232, 0.34);
+  font-variant-numeric: tabular-nums;
+}
+
+:root.theme-pocket .physics-pill {
+  background: rgba(45, 118, 146, 0.14);
+  color: #1d5d77;
+  border-color: rgba(45, 118, 146, 0.32);
+}
+
+.physics-pill.zero-g {
+  background: rgba(92, 224, 184, 0.22);
+  color: #2fb88f;
+  border-color: rgba(92, 224, 184, 0.45);
+}
+
+.physics-pill.coriolis-shift {
+  background: rgba(240, 168, 72, 0.22);
+  color: #d67622;
+  border-color: rgba(240, 168, 72, 0.45);
+}
+
 .loc-sub {
   font-size: 11px;
   color: var(--text-sub);

@@ -25,15 +25,21 @@ import {
   makePlacementId,
 } from './regions';
 import {
+  CYLINDER_RADIUS,
+  ENDCAP_DEPTH,
+  ENDCAP_Z_START,
   GroundBackdropWorld,
   GroundLookPreset,
   ViewMode,
+  endcapFloorY,
   groundBowlSlopeTilt,
   groundBowlY,
+  wrapArcS,
 } from './cylinderWorld';
 import { InteriorKind, InteriorWorld } from './interiorWorld';
 import {
   Collider2D,
+  CoriolisBallSim,
   DoorwayTarget,
   PlayerController,
   RoomBounds,
@@ -485,6 +491,10 @@ export class DioramaEngine {
   private pipeline = new InkPipeline();
   private models = new ModelLibrary();
   private groundBackdrop: GroundBackdropWorld;
+  private worldRollPivot = new THREE.Group();
+  private worldRollInner = new THREE.Group();
+  private coriolisSim: CoriolisBallSim;
+  private baseSunPos = new THREE.Vector3(16, 22, 12);
   private spaceWorld: SpaceWorld;
   private interiorWorld: InteriorWorld;
 
@@ -660,21 +670,32 @@ export class DioramaEngine {
     this.sunLight.shadow.bias = -0.0006;
     this.sunLight.shadow.normalBias = 0.03;
 
+    this.worldRollPivot.position.set(0, CYLINDER_RADIUS, 0);
+    this.worldRollInner.position.set(0, -CYLINDER_RADIUS, 0);
+    this.worldRollPivot.add(this.worldRollInner);
+
     this.scene.add(this.hemiLight);
     this.scene.add(this.sunLight);
-    this.scene.add(this.islandGroup);
-    this.scene.add(this.placedGroup);
-    this.scene.add(this.festiveGroup);
-    this.scene.add(this.fxGroup);
-    this.scene.add(this.ghostGroup);
+    this.scene.add(this.sunLight.target);
+    this.scene.add(this.worldRollPivot);
 
-    this.groundBackdrop = new GroundBackdropWorld(this.scene, this.uniforms);
+    this.worldRollInner.add(this.islandGroup);
+    this.worldRollInner.add(this.placedGroup);
+    this.worldRollInner.add(this.festiveGroup);
+    this.worldRollInner.add(this.fxGroup);
+    this.worldRollInner.add(this.ghostGroup);
+
+    this.groundBackdrop = new GroundBackdropWorld(this.worldRollInner, this.uniforms);
 
     this.player = new PlayerController(this.uniforms);
     const [initX, initZ] = this.getRegionSpawn(this.region.id);
     this.outdoorSavedPos.set(initX, initZ);
     this.player.teleport(initX, initZ, groundBowlY(initX, initZ), Math.PI);
+    this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
     this.scene.add(this.player.avatar.root);
+
+    this.coriolisSim = new CoriolisBallSim(this.uniforms);
+    this.scene.add(this.coriolisSim.root);
 
     this.spaceSun.position.set(55, 40, 38);
     this.spaceScene.add(this.spaceHemi, this.spaceSun);
@@ -727,6 +748,14 @@ export class DioramaEngine {
       playerX: pSnap.x,
       playerY: pSnap.y,
       playerZ: pSnap.z,
+      arcS: pSnap.arcS,
+      barrelAngleDeg: pSnap.barrelAngleDeg,
+      effectiveG: pSnap.effectiveG,
+      coriolisShiftG: pSnap.coriolisShiftG,
+      zoneLabel: pSnap.zoneLabel,
+      isZeroG: pSnap.isZeroG,
+      coriolisLandingOffsetX: this.coriolisSim.lastLandingOffsetX,
+      coriolisActive: this.coriolisSim.isActive(),
       playerFacing: pSnap.facingYaw,
       playerSpeed: pSnap.speed,
       grounded: pSnap.grounded,
@@ -1490,6 +1519,7 @@ export class DioramaEngine {
 
     this.sunLight.color.set(sunCol);
     this.sunLight.intensity = sunInt;
+    this.baseSunPos.set(...sunPos);
     this.sunLight.position.set(...sunPos);
     this.hemiLight.color.set(hemiSky);
     this.hemiLight.groundColor.set(hemiGnd);
@@ -1601,8 +1631,10 @@ export class DioramaEngine {
     this.rebuildGhostPreview();
     const [sx, sz] = this.getRegionSpawn(bp.id);
     this.outdoorSavedPos.set(sx, sz);
+    this.coriolisSim.clear();
     if (this.viewMode !== 'interior') {
       this.player.teleport(sx, sz, groundBowlY(sx, sz), Math.PI);
+      this.worldRollPivot.rotation.z = this.viewMode === 'ground' ? -this.player.arcS / CYLINDER_RADIUS : 0;
     }
     this.applyAtmosphere();
     this.onStateChanged?.();
@@ -1750,13 +1782,14 @@ export class DioramaEngine {
   setViewMode(mode: ViewMode): void {
     const prevMode = this.viewMode;
     if (prevMode === 'ground' && mode !== 'ground') {
-      this.outdoorSavedPos.set(this.player.pos.x, this.player.pos.z);
+      this.outdoorSavedPos.set(this.player.arcS, this.player.pos.z);
     }
 
     this.viewMode = mode;
     this.controls.enabled = mode === 'plot';
     this.spaceControls.enabled = mode === 'space';
     this.groundBackdrop.root.visible = mode === 'ground';
+    this.coriolisSim.root.visible = mode === 'ground' && this.coriolisSim.root.visible;
     if (this.cliffMesh) this.cliffMesh.visible = mode === 'plot';
 
     if (mode !== 'plot') {
@@ -1769,6 +1802,8 @@ export class DioramaEngine {
     this.player.setMoveInput(0, 0, false);
 
     if (mode === 'interior') {
+      this.coriolisSim.clear();
+      this.worldRollPivot.rotation.z = 0;
       this.player.avatar.root.visible = true;
       this.player.avatar.root.scale.setScalar(1.05);
       if (this.player.avatar.root.parent !== this.interiorScene) {
@@ -1785,10 +1820,13 @@ export class DioramaEngine {
       if (prevMode !== 'ground') {
         const sx = this.outdoorSavedPos.x;
         const sz = this.outdoorSavedPos.y;
-        this.player.teleport(sx, sz, groundBowlY(sx, sz), this.player.facingYaw, false);
+        this.player.teleport(sx, sz, this.player.getCylinderFloorY(sx, sz), this.player.facingYaw, false);
       }
+      this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
       this.walkTime = 0;
     } else {
+      this.coriolisSim.clear();
+      this.worldRollPivot.rotation.z = 0;
       this.player.avatar.root.visible = false;
     }
 
@@ -1801,8 +1839,39 @@ export class DioramaEngine {
     this.groundPreset = preset;
     this.player.avatar.root.visible = this.viewMode === 'ground' && preset !== 'sky';
     if (preset === 'street') {
+      if (Math.abs(this.player.arcS) > 25 || this.player.pos.z < -25) {
+        const [sx, sz] = this.getRegionSpawn(this.region.id);
+        this.coriolisSim.clear();
+        this.player.teleport(sx, sz, this.player.getCylinderFloorY(sx, sz), Math.PI, false);
+        this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
+        this.fpYaw = 0.04;
+        this.targetFpYaw = 0.04;
+        this.fpPitch = 0.14;
+        this.groundCamDist = 4.6;
+      }
       this.targetFpPitch = 0.14;
       this.targetGroundCamDist = 4.6;
+    } else if (preset === 'bridge') {
+      const bridgeArcS = ((58 * Math.PI) / 180) * CYLINDER_RADIUS;
+      this.coriolisSim.clear();
+      this.player.teleport(bridgeArcS, 0, 0, Math.PI * 0.5, false);
+      this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
+      this.fpYaw = -Math.PI * 0.44;
+      this.targetFpYaw = this.fpYaw;
+      this.fpPitch = 0.1;
+      this.targetFpPitch = 0.1;
+      this.groundCamDist = 6.0;
+      this.targetGroundCamDist = 6.0;
+    } else if (preset === 'endcap') {
+      this.coriolisSim.clear();
+      this.player.teleport(0, -376, endcapFloorY(-376), Math.PI, false);
+      this.worldRollPivot.rotation.z = 0;
+      this.fpYaw = -0.24;
+      this.targetFpYaw = -0.24;
+      this.fpPitch = 0.78;
+      this.targetFpPitch = 0.78;
+      this.groundCamDist = 5.8;
+      this.targetGroundCamDist = 5.8;
     } else if (preset === 'sky') {
       this.targetFpYaw = 0.0;
       this.targetFpPitch = 0.44;
@@ -1896,20 +1965,40 @@ export class DioramaEngine {
     return false;
   }
 
+  throwCoriolisBall(): void {
+    if (this.viewMode !== 'ground') {
+      this.setViewMode('ground');
+    }
+    const launchArc = wrapArcS(this.player.arcS - 0.95);
+    const launchZ = this.player.pos.z - 2.2;
+    const floorY = this.player.getCylinderFloorY(launchArc, launchZ);
+    this.coriolisSim.launch(launchArc, floorY, launchZ, this.player.arcS);
+    this.onStateChanged?.();
+  }
+
   teleportPlayer(x: number, z: number): void {
     if (this.viewMode === 'interior') {
       const b = this.interiorWorld.getRoomBounds(this.interiorKind);
       const cx = Math.max(b.minX, Math.min(b.maxX, x));
       const cz = Math.max(b.minZ, Math.min(b.maxZ, z));
-      this.player.teleport(cx, cz, 0, this.player.facingYaw);
+      this.player.teleport(cx, cz, 0, this.player.facingYaw, true);
       return;
     }
-    const cx = Math.max(this.outdoorBounds.minX, Math.min(this.outdoorBounds.maxX, x));
-    const cz = Math.max(this.outdoorBounds.minZ, Math.min(this.outdoorBounds.maxZ, z));
-    this.outdoorSavedPos.set(cx, cz);
-    this.player.teleport(cx, cz, groundBowlY(cx, cz), Math.atan2(-cx, -cz));
-    this.fpYaw = Math.atan2(cx, cz);
-    this.targetFpYaw = this.fpYaw;
+    const arc = wrapArcS(x);
+    const cz = Math.max(ENDCAP_Z_START - ENDCAP_DEPTH, Math.min(118, z));
+    this.coriolisSim.clear();
+    this.outdoorSavedPos.set(arc, cz);
+    this.player.teleport(arc, cz, this.player.getCylinderFloorY(arc, cz), Math.PI, false);
+    this.worldRollPivot.rotation.z = this.viewMode === 'ground' ? -this.player.arcS / CYLINDER_RADIUS : 0;
+    if (cz < -410) {
+      this.fpYaw = 0.18;
+      this.targetFpYaw = 0.18;
+      this.fpPitch = 0.78;
+      this.targetFpPitch = 0.78;
+      this.groundCamDist = 5.8;
+      this.targetGroundCamDist = 5.8;
+    }
+    this.onStateChanged?.();
   }
 
   moveFirstPerson(forward: number, right: number): void {
@@ -2067,8 +2156,10 @@ export class DioramaEngine {
     }
     if (this.viewMode === 'ground') {
       const [sx, sz] = this.getRegionSpawn(this.region.id);
+      this.coriolisSim.clear();
       this.outdoorSavedPos.set(sx, sz);
       this.player.teleport(sx, sz, groundBowlY(sx, sz), Math.PI);
+      this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
       this.targetFpYaw = 0.04;
       this.targetFpPitch = 0.14;
       this.targetGroundCamDist = 4.6;
@@ -2362,6 +2453,17 @@ export class DioramaEngine {
         this.simTime,
       );
 
+      this.worldRollPivot.rotation.z = -this.player.arcS / CYLINDER_RADIUS;
+      this.coriolisSim.step(dt, this.player.arcS);
+
+      this.sunLight.target.position.set(this.player.pos.x, this.player.pos.y, this.player.pos.z);
+      this.sunLight.position.set(
+        this.player.pos.x + this.baseSunPos.x,
+        this.player.pos.y + this.baseSunPos.y,
+        this.player.pos.z + this.baseSunPos.z,
+      );
+      this.sunLight.target.updateMatrixWorld();
+
       if (this.groundPreset === 'sky') {
         this.player.avatar.root.visible = false;
         this.groundCamera.position.set(this.player.pos.x, this.player.pos.y + 2.05, this.player.pos.z);
@@ -2374,7 +2476,8 @@ export class DioramaEngine {
         const cx = baseTx + Math.sin(this.fpYaw) * Math.cos(this.fpPitch) * this.groundCamDist;
         const cz = baseTz + Math.cos(this.fpYaw) * Math.cos(this.fpPitch) * this.groundCamDist;
         const desiredCy = baseTy - Math.sin(this.fpPitch) * this.groundCamDist;
-        const cy = Math.max(groundBowlY(cx, cz) + 0.48, desiredCy);
+        const camFloor = this.player.getCylinderFloorY(this.player.arcS + cx, cz);
+        const cy = Math.max(camFloor + 0.55, desiredCy);
         // When clamped near terrain looking skyward, raise look-target smoothly so pitch up to +60° stays responsive
         const lookTy = cy + Math.sin(this.fpPitch) * this.groundCamDist;
         this.groundCamera.position.set(cx, cy, cz);
@@ -2382,7 +2485,7 @@ export class DioramaEngine {
       }
 
       const doorTarget = this.groundBackdrop.getDoorwayTarget();
-      const doorDist = Math.hypot(this.player.pos.x - doorTarget.x, this.player.pos.z - doorTarget.z);
+      const doorDist = Math.hypot(this.player.arcS - doorTarget.x, this.player.pos.z - doorTarget.z);
       const nextDoor = doorDist < 3.6 ? doorTarget : null;
       if (Boolean(nextDoor) !== Boolean(this.nearbyDoor) || nextDoor?.label !== this.nearbyDoor?.label) {
         this.nearbyDoor = nextDoor;
@@ -2390,6 +2493,11 @@ export class DioramaEngine {
       }
 
       this.groundBackdrop.update(dt, this.simTime);
+    } else {
+      this.worldRollPivot.rotation.z = 0;
+      this.sunLight.target.position.set(0, 0, 0);
+      this.sunLight.position.copy(this.baseSunPos);
+      this.sunLight.target.updateMatrixWorld();
     }
 
     // Smooth camera preset tweening (plot view only)
@@ -2539,6 +2647,7 @@ export class DioramaEngine {
     this.spaceWorld.dispose();
     this.interiorWorld.dispose();
     this.player.dispose();
+    this.coriolisSim.dispose();
     this.pipeline.dispose();
     this.renderer.dispose();
   }
