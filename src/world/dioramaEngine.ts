@@ -570,7 +570,7 @@ export class DioramaEngine {
   private season: SeasonId = 'summer';
   private timeMode: TimeMode = 'day';
   private weather: WeatherId = 'breeze';
-  private renderStyle: RenderStyleId = 'pocket';
+  private renderStyle: RenderStyleId = 'hd';
   private activeSpecialSceneId: string | null = null;
   private cameraTween: { targetAz: number; targetPol: number; targetZoom: number } | null = null;
 

@@ -264,7 +264,7 @@ export class InkPipeline {
   private compositeMat: THREE.ShaderMaterial;
   private rtW = 0;
   private rtH = 0;
-  private curStyle: RenderStyleId = 'pocket';
+  private curStyle: RenderStyleId = 'hd';
 
   constructor() {
     this.depthTex = new THREE.DepthTexture(2, 2);
@@ -300,7 +300,7 @@ export class InkPipeline {
         uTexelSize: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
         uPixelGrid: { value: new THREE.Vector2(640, 360) },
         uPixelMode: { value: 0 },
-        uPocketMode: { value: 1 },
+        uPocketMode: { value: 0 },
         uViewportCss: { value: new THREE.Vector2(1280, 720) },
         uDarkTheme: { value: 0 },
         uInkStrength: { value: 0.78 },
