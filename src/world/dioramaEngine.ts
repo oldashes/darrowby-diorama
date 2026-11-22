@@ -28,8 +28,16 @@ import {
   GroundBackdropWorld,
   GroundLookPreset,
   ViewMode,
+  groundBowlSlopeTilt,
+  groundBowlY,
 } from './cylinderWorld';
 import { InteriorKind, InteriorWorld } from './interiorWorld';
+import {
+  Collider2D,
+  DoorwayTarget,
+  PlayerController,
+  RoomBounds,
+} from './playerController';
 import { SpaceSectorPin, SpaceWorld } from './spaceWorld';
 
 export type BuildToolMode = 'view' | 'place' | 'delete';
@@ -527,20 +535,26 @@ export class DioramaEngine {
   private viewMode: ViewMode = 'ground';
   private groundPreset: GroundLookPreset = 'street';
   private interiorKind: InteriorKind = 'tavern';
-  private fpPos = new THREE.Vector3(0.4, 2.25, 11.4);
-  private targetFpPos = new THREE.Vector3(0.4, 2.25, 11.4);
   private fpYaw = 0.04;
   private targetFpYaw = 0.04;
-  private fpPitch = 0.13;
-  private targetFpPitch = 0.13;
+  private fpPitch = 0.14;
+  private targetFpPitch = 0.14;
+  private groundCamDist = 4.6;
+  private targetGroundCamDist = 4.6;
   private walkTime = 0;
 
-  private inPos = new THREE.Vector3(1.35, 1.72, 2.95);
-  private targetInPos = new THREE.Vector3(1.35, 1.72, 2.95);
-  private inYaw = 0.24;
-  private targetInYaw = 0.24;
-  private inPitch = -0.02;
-  private targetInPitch = -0.02;
+  private inYaw = 0.22;
+  private targetInYaw = 0.22;
+  private inPitch = 0.08;
+  private targetInPitch = 0.08;
+  private inCamDist = 2.65;
+  private targetInCamDist = 2.65;
+
+  private player: PlayerController;
+  private outdoorColliders: Collider2D[] = [];
+  private outdoorSavedPos = new THREE.Vector2(-0.4, 2.2);
+  private nearbyDoor: DoorwayTarget | null = null;
+  private readonly outdoorBounds: RoomBounds = { minX: -118, maxX: 118, minZ: -165, maxZ: 85 };
 
   private region: RegionBlueprint = cloneBlueprint(PRESET_REGIONS.sydney);
   private season: SeasonId = 'summer';
@@ -596,8 +610,8 @@ export class DioramaEngine {
 
     this.groundCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 68 : 58, aspect, 0.25, 1800);
     this.groundCamera.rotation.order = 'YXZ';
-    this.groundCamera.position.copy(this.fpPos);
-    this.groundCamera.rotation.set(this.fpPitch, this.fpYaw, 0);
+    this.groundCamera.position.set(0, 1.8, 7.6);
+    this.groundCamera.lookAt(-0.4, 1.4, 2.2);
 
     this.spaceCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 54 : 44, aspect, 0.5, 1200);
     this.spaceCamera.position.set(42, 16, 68);
@@ -605,8 +619,8 @@ export class DioramaEngine {
 
     this.interiorCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 70 : 62, aspect, 0.1, 80);
     this.interiorCamera.rotation.order = 'YXZ';
-    this.interiorCamera.position.copy(this.inPos);
-    this.interiorCamera.rotation.set(this.inPitch, this.inYaw, 0);
+    this.interiorCamera.position.set(0.8, 1.6, 4.1);
+    this.interiorCamera.lookAt(0.2, 1.4, 2.1);
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -656,6 +670,12 @@ export class DioramaEngine {
 
     this.groundBackdrop = new GroundBackdropWorld(this.scene, this.uniforms);
 
+    this.player = new PlayerController(this.uniforms);
+    const [initX, initZ] = this.getRegionSpawn(this.region.id);
+    this.outdoorSavedPos.set(initX, initZ);
+    this.player.teleport(initX, initZ, groundBowlY(initX, initZ), Math.PI);
+    this.scene.add(this.player.avatar.root);
+
     this.spaceSun.position.set(55, 40, 38);
     this.spaceScene.add(this.spaceHemi, this.spaceSun);
     this.spaceWorld = new SpaceWorld(this.spaceScene, this.uniforms);
@@ -664,6 +684,7 @@ export class DioramaEngine {
 
     this.initWeatherAndFx();
     this.rebuildIslandGeometry();
+    this.rebuildPlayerColliders();
     this.applyAtmosphere();
     this.resize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight);
 
@@ -694,6 +715,7 @@ export class DioramaEngine {
       else if (cat === 'nature') nature += 1;
     }
 
+    const pSnap = this.player.getSnapshot();
     return {
       viewMode: this.viewMode,
       groundPreset: this.groundPreset,
@@ -702,6 +724,17 @@ export class DioramaEngine {
       fpPitch: this.fpPitch,
       inYaw: this.inYaw,
       inPitch: this.inPitch,
+      playerX: pSnap.x,
+      playerY: pSnap.y,
+      playerZ: pSnap.z,
+      playerFacing: pSnap.facingYaw,
+      playerSpeed: pSnap.speed,
+      grounded: pSnap.grounded,
+      isGliding: pSnap.isGliding,
+      isSprinting: pSnap.isSprinting || this.player.isSprintToggled(),
+      sprintToggled: this.player.isSprintToggled(),
+      heightAboveGround: pSnap.heightAboveGround,
+      nearbyDoor: this.nearbyDoor,
       region: this.region,
       season: this.season,
       timeMode: this.timeMode,
@@ -1248,7 +1281,86 @@ export class DioramaEngine {
         }
       }
     }
+    this.rebuildPlayerColliders();
     this.applyAtmosphere();
+  }
+
+  private getRegionSpawn(regionId: string): [number, number] {
+    switch (regionId) {
+      case 'sydney':
+        return [-0.4, 1.35];
+      case 'darrowby':
+        return [-0.4, 2.8];
+      case 'wangshi':
+        return [-3.2, 4.6];
+      case 'otaru':
+        return [0.0, 4.8];
+      default:
+        return [0.0, 6.2];
+    }
+  }
+
+  private rebuildPlayerColliders(): void {
+    const out: Collider2D[] = [...this.groundBackdrop.getColliders()];
+    const footprintRadius: Record<string, number> = {
+      harbour_sails: 1.55,
+      inn: 1.32,
+      house_1: 1.12,
+      house_2: 1.08,
+      wangshi_house: 1.12,
+      stable: 1.15,
+      mill: 1.15,
+      greenhouse: 1.05,
+      coastal_lighthouse: 0.85,
+      tea_stall: 0.85,
+      well: 0.55,
+      jacaranda_tree: 0.36,
+      tree_common: 0.36,
+      tree_birch: 0.35,
+      tree_willow: 0.38,
+      tree_pine: 0.36,
+      sedan: 0.55,
+      rock_moss: 0.42,
+      bench: 0.38,
+      hay: 0.36,
+      barrel: 0.32,
+      crate: 0.32,
+      beehive: 0.36,
+    };
+
+    for (const e of this.placedEntries) {
+      const r = footprintRadius[e.data.catalogId];
+      if (r) {
+        out.push({ kind: 'circle', x: e.data.x, z: e.data.z, r });
+      }
+    }
+
+    if (this.region.osmData?.buildings) {
+      for (const b of this.region.osmData.buildings) {
+        if (b.points.length < 3) continue;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minZ = Infinity;
+        let maxZ = -Infinity;
+        for (const [px, pz] of b.points) {
+          if (px < minX) minX = px;
+          if (px > maxX) maxX = px;
+          if (pz < minZ) minZ = pz;
+          if (pz > maxZ) maxZ = pz;
+        }
+        if (maxX - minX > 0.3 && maxZ - minZ > 0.3) {
+          out.push({
+            kind: 'box',
+            minX: minX + 0.12,
+            maxX: maxX - 0.12,
+            minZ: minZ + 0.12,
+            maxZ: maxZ - 0.12,
+          });
+        }
+      }
+    }
+
+    this.outdoorColliders = out;
   }
 
   private rebuildGhostPreview(): void {
@@ -1487,6 +1599,11 @@ export class DioramaEngine {
     this.rebuildIslandGeometry();
     this.rebuildPlacedModels();
     this.rebuildGhostPreview();
+    const [sx, sz] = this.getRegionSpawn(bp.id);
+    this.outdoorSavedPos.set(sx, sz);
+    if (this.viewMode !== 'interior') {
+      this.player.teleport(sx, sz, groundBowlY(sx, sz), Math.PI);
+    }
     this.applyAtmosphere();
     this.onStateChanged?.();
   }
@@ -1631,6 +1748,11 @@ export class DioramaEngine {
   }
 
   setViewMode(mode: ViewMode): void {
+    const prevMode = this.viewMode;
+    if (prevMode === 'ground' && mode !== 'ground') {
+      this.outdoorSavedPos.set(this.player.pos.x, this.player.pos.z);
+    }
+
     this.viewMode = mode;
     this.controls.enabled = mode === 'plot';
     this.spaceControls.enabled = mode === 'space';
@@ -1644,25 +1766,44 @@ export class DioramaEngine {
       this.rebuildGhostPreview();
     }
 
+    this.player.setMoveInput(0, 0, false);
+
     if (mode === 'interior') {
+      this.player.avatar.root.visible = true;
+      this.player.avatar.root.scale.setScalar(1.05);
+      if (this.player.avatar.root.parent !== this.interiorScene) {
+        this.interiorScene.add(this.player.avatar.root);
+      }
       const autoRoom: InteriorKind = this.region.id === 'darrowby' ? 'greenhouse' : 'tavern';
       this.setInteriorKind(autoRoom);
     } else if (mode === 'ground') {
+      this.player.avatar.root.visible = this.groundPreset !== 'sky';
+      this.player.avatar.root.scale.setScalar(1.0);
+      if (this.player.avatar.root.parent !== this.scene) {
+        this.scene.add(this.player.avatar.root);
+      }
+      if (prevMode !== 'ground') {
+        const sx = this.outdoorSavedPos.x;
+        const sz = this.outdoorSavedPos.y;
+        this.player.teleport(sx, sz, groundBowlY(sx, sz), this.player.facingYaw, false);
+      }
       this.walkTime = 0;
+    } else {
+      this.player.avatar.root.visible = false;
     }
 
+    this.nearbyDoor = null;
     this.applyAtmosphere();
     this.onStateChanged?.();
   }
 
   setGroundLookPreset(preset: GroundLookPreset): void {
     this.groundPreset = preset;
+    this.player.avatar.root.visible = this.viewMode === 'ground' && preset !== 'sky';
     if (preset === 'street') {
-      this.targetFpPos.set(0.4, 2.25, 11.4);
-      this.targetFpYaw = 0.04;
-      this.targetFpPitch = 0.13;
+      this.targetFpPitch = 0.14;
+      this.targetGroundCamDist = 4.6;
     } else if (preset === 'sky') {
-      this.targetFpPos.set(0.0, 2.0, 10.6);
       this.targetFpYaw = 0.0;
       this.targetFpPitch = 0.44;
     } else {
@@ -1675,18 +1816,19 @@ export class DioramaEngine {
     this.interiorKind = kind;
     this.interiorWorld.setRoom(kind);
     if (kind === 'tavern') {
-      this.inPos.set(1.35, 1.72, 2.95);
-      this.targetInPos.set(1.35, 1.72, 2.95);
-      this.inYaw = 0.24;
-      this.targetInYaw = 0.24;
+      this.player.teleport(0.25, 1.35, 0, Math.PI * 0.92, true);
+      this.inYaw = 0.22;
+      this.targetInYaw = 0.22;
     } else {
-      this.inPos.set(0.1, 1.7, 3.05);
-      this.targetInPos.set(0.1, 1.7, 3.05);
-      this.inYaw = 0.04;
-      this.targetInYaw = 0.04;
+      this.player.teleport(0.05, 1.35, 0, Math.PI * 0.98, true);
+      this.inYaw = 0.05;
+      this.targetInYaw = 0.05;
     }
-    this.inPitch = -0.02;
-    this.targetInPitch = -0.02;
+    this.inPitch = 0.08;
+    this.targetInPitch = 0.08;
+    this.inCamDist = 2.65;
+    this.targetInCamDist = 2.65;
+    this.nearbyDoor = null;
     this.onStateChanged?.();
   }
 
@@ -1696,39 +1838,130 @@ export class DioramaEngine {
         this.groundPreset = 'street';
         this.onStateChanged?.();
       }
-      this.targetFpYaw += dx * 0.0042;
-      this.targetFpPitch = Math.max(-0.35, Math.min(1.05, this.targetFpPitch + dy * 0.0042));
+      this.targetFpYaw += dx * 0.0046;
+      this.targetFpPitch = Math.max(-0.38, Math.min(1.05, this.targetFpPitch + dy * 0.0042));
     } else if (this.viewMode === 'interior') {
-      this.targetInYaw += dx * 0.0045;
-      this.targetInPitch = Math.max(-0.55, Math.min(0.65, this.targetInPitch + dy * 0.0045));
+      this.targetInYaw += dx * 0.0048;
+      this.targetInPitch = Math.max(-0.45, Math.min(0.65, this.targetInPitch + dy * 0.0044));
     }
   }
 
+  setMoveInput(right: number, forward: number, sprint = false): void {
+    if ((Math.abs(right) > 0.05 || Math.abs(forward) > 0.05) && this.viewMode === 'ground') {
+      if (this.groundPreset === 'walk' || this.groundPreset === 'sky') {
+        this.groundPreset = 'street';
+        this.player.avatar.root.visible = true;
+        this.targetFpPitch = Math.min(0.28, this.targetFpPitch);
+        this.onStateChanged?.();
+      }
+    }
+    this.player.setMoveInput(right, forward, sprint);
+  }
+
+  setSprintToggle(on: boolean): void {
+    this.player.setSprintToggle(on);
+    this.onStateChanged?.();
+  }
+
+  triggerJumpOrGlide(): 'jump' | 'glide_open' | 'glide_close' | 'none' {
+    if (this.viewMode === 'ground' && this.groundPreset === 'sky') {
+      this.groundPreset = 'street';
+      this.player.avatar.root.visible = true;
+      this.targetFpPitch = 0.14;
+      this.onStateChanged?.();
+    }
+    if (this.viewMode === 'ground' || this.viewMode === 'interior') {
+      return this.player.triggerJumpOrGlide(this.viewMode === 'ground');
+    }
+    return 'none';
+  }
+
+  interactNearbyDoor(): boolean {
+    if (!this.nearbyDoor) return false;
+    const act = this.nearbyDoor.action;
+    if (act === 'enter_tavern') {
+      this.setViewMode('interior');
+      this.setInteriorKind('tavern');
+      return true;
+    }
+    if (act === 'enter_greenhouse') {
+      this.setViewMode('interior');
+      this.setInteriorKind('greenhouse');
+      return true;
+    }
+    if (act === 'exit_interior') {
+      this.setViewMode('ground');
+      return true;
+    }
+    return false;
+  }
+
+  teleportPlayer(x: number, z: number): void {
+    if (this.viewMode === 'interior') {
+      const b = this.interiorWorld.getRoomBounds(this.interiorKind);
+      const cx = Math.max(b.minX, Math.min(b.maxX, x));
+      const cz = Math.max(b.minZ, Math.min(b.maxZ, z));
+      this.player.teleport(cx, cz, 0, this.player.facingYaw);
+      return;
+    }
+    const cx = Math.max(this.outdoorBounds.minX, Math.min(this.outdoorBounds.maxX, x));
+    const cz = Math.max(this.outdoorBounds.minZ, Math.min(this.outdoorBounds.maxZ, z));
+    this.outdoorSavedPos.set(cx, cz);
+    this.player.teleport(cx, cz, groundBowlY(cx, cz), Math.atan2(-cx, -cz));
+    this.fpYaw = Math.atan2(cx, cz);
+    this.targetFpYaw = this.fpYaw;
+  }
+
   moveFirstPerson(forward: number, right: number): void {
+    const dtStep = 0.16;
     if (this.viewMode === 'ground') {
       if (this.groundPreset === 'walk') {
         this.groundPreset = 'street';
         this.onStateChanged?.();
       }
-      const sinY = Math.sin(this.targetFpYaw);
-      const cosY = Math.cos(this.targetFpYaw);
-      const nx = this.targetFpPos.x - sinY * forward + cosY * right;
-      const nz = this.targetFpPos.z - cosY * forward - sinY * right;
-      this.targetFpPos.x = Math.max(-26, Math.min(26, nx));
-      this.targetFpPos.z = Math.max(-26, Math.min(26, nz));
+      this.player.setMoveInput(right, forward, false);
+      this.player.step(
+        dtStep,
+        this.fpYaw,
+        this.outdoorBounds,
+        groundBowlY,
+        groundBowlSlopeTilt,
+        this.outdoorColliders,
+        true,
+        false,
+        this.simTime,
+      );
+      this.player.setMoveInput(0, 0, false);
     } else if (this.viewMode === 'interior') {
-      const sinY = Math.sin(this.targetInYaw);
-      const cosY = Math.cos(this.targetInYaw);
-      const nx = this.targetInPos.x - sinY * forward + cosY * right;
-      const nz = this.targetInPos.z - cosY * forward - sinY * right;
-      this.targetInPos.x = Math.max(-3.9, Math.min(3.9, nx));
-      this.targetInPos.z = Math.max(-3.1, Math.min(3.3, nz));
+      const b = this.interiorWorld.getRoomBounds(this.interiorKind);
+      this.player.setMoveInput(right, forward, false);
+      this.player.step(
+        dtStep,
+        this.inYaw,
+        b,
+        () => 0,
+        () => 0,
+        this.interiorWorld.getColliders(this.interiorKind),
+        false,
+        true,
+        this.simTime,
+      );
+      this.player.setMoveInput(0, 0, false);
     }
   }
 
   handleFirstPersonWheel(deltaY: number): void {
-    const step = -deltaY * 0.025;
-    this.moveFirstPerson(step, 0);
+    if (this.viewMode === 'ground') {
+      this.targetGroundCamDist = Math.max(
+        2.8,
+        Math.min(11.5, this.targetGroundCamDist + deltaY * 0.0055),
+      );
+    } else if (this.viewMode === 'interior') {
+      this.targetInCamDist = Math.max(
+        1.8,
+        Math.min(4.4, this.targetInCamDist + deltaY * 0.004),
+      );
+    }
   }
 
   handleInteriorTap(clientX: number, clientY: number): boolean {
@@ -1833,6 +2066,12 @@ export class DioramaEngine {
       return;
     }
     if (this.viewMode === 'ground') {
+      const [sx, sz] = this.getRegionSpawn(this.region.id);
+      this.outdoorSavedPos.set(sx, sz);
+      this.player.teleport(sx, sz, groundBowlY(sx, sz), Math.PI);
+      this.targetFpYaw = 0.04;
+      this.targetFpPitch = 0.14;
+      this.targetGroundCamDist = 4.6;
       this.setGroundLookPreset('street');
       return;
     }
@@ -1907,6 +2146,7 @@ export class DioramaEngine {
             const removed = this.placedEntries.splice(idx, 1)[0];
             this.placedGroup.remove(removed.asset.root);
             this.savePlacements();
+            this.rebuildPlayerColliders();
             playRemoveSound();
             this.onStateChanged?.();
             return true;
@@ -1946,6 +2186,7 @@ export class DioramaEngine {
       baseY: catalogId === 'duck' || catalogId === 'lilypad' || catalogId === 'sailboat' ? 0.025 : 0,
     });
     this.savePlacements();
+    this.rebuildPlayerColliders();
     this.applyAtmosphere();
     this.onStateChanged?.();
     return data;
@@ -1956,6 +2197,7 @@ export class DioramaEngine {
     const removed = this.placedEntries.pop()!;
     this.placedGroup.remove(removed.asset.root);
     this.savePlacements();
+    this.rebuildPlayerColliders();
     playRemoveSound();
     this.onStateChanged?.();
     return true;
@@ -2027,12 +2269,51 @@ export class DioramaEngine {
     }
 
     if (this.viewMode === 'interior') {
-      const easeIn = Math.min(1, dt * 8.5);
-      this.inPos.lerp(this.targetInPos, easeIn);
+      const easeIn = Math.min(1, dt * 10);
       this.inYaw += (this.targetInYaw - this.inYaw) * easeIn;
       this.inPitch += (this.targetInPitch - this.inPitch) * easeIn;
-      this.interiorCamera.position.copy(this.inPos);
-      this.interiorCamera.rotation.set(this.inPitch, this.inYaw, 0);
+      this.inCamDist += (this.targetInCamDist - this.inCamDist) * easeIn;
+
+      const b = this.interiorWorld.getRoomBounds(this.interiorKind);
+      this.player.step(
+        dt,
+        this.inYaw,
+        b,
+        () => 0,
+        () => 0,
+        this.interiorWorld.getColliders(this.interiorKind),
+        false,
+        true,
+        this.simTime,
+      );
+
+      // Clamped spring-arm behind character inside interior room walls
+      const tx = this.player.pos.x;
+      const ty = this.player.pos.y + 1.05;
+      const tz = this.player.pos.z;
+      const dx = Math.sin(this.inYaw) * Math.cos(this.inPitch);
+      const dy = -Math.sin(this.inPitch);
+      const dz = Math.cos(this.inYaw) * Math.cos(this.inPitch);
+      let maxT = this.inCamDist;
+      const margin = 0.32;
+      if (dx > 1e-4) maxT = Math.min(maxT, (b.maxX - margin - tx) / dx);
+      else if (dx < -1e-4) maxT = Math.min(maxT, (b.minX + margin - tx) / dx);
+      if (dy > 1e-4) maxT = Math.min(maxT, (b.height - margin - ty) / dy);
+      else if (dy < -1e-4) maxT = Math.min(maxT, (0.45 - ty) / dy);
+      if (dz > 1e-4) maxT = Math.min(maxT, (b.maxZ + 0.35 - tz) / dz);
+      else if (dz < -1e-4) maxT = Math.min(maxT, (b.minZ + margin - tz) / dz);
+      const effDist = Math.max(1.25, maxT);
+
+      this.interiorCamera.position.set(tx + dx * effDist, Math.max(0.9, ty + dy * effDist + 0.38), tz + dz * effDist);
+      this.interiorCamera.lookAt(tx, ty + 0.12, tz);
+
+      const exitTarget = this.interiorWorld.getExitTarget(this.interiorKind);
+      const exitDist = Math.hypot(this.player.pos.x - exitTarget.x, this.player.pos.z - exitTarget.z);
+      const nextDoor = exitDist < 1.55 ? exitTarget : null;
+      if (Boolean(nextDoor) !== Boolean(this.nearbyDoor) || nextDoor?.label !== this.nearbyDoor?.label) {
+        this.nearbyDoor = nextDoor;
+        this.onStateChanged?.();
+      }
 
       this.interiorWorld.update(this.simTime);
 
@@ -2044,7 +2325,9 @@ export class DioramaEngine {
         isDarkSky,
         this.skyTopHex,
         this.skyBotHex,
-        () => {},
+        (hide) => {
+          this.player.avatar.shadowMesh.visible = !hide;
+        },
       );
 
       if (!this.readyFired) {
@@ -2055,22 +2338,57 @@ export class DioramaEngine {
     }
 
     if (this.viewMode === 'ground') {
+      const easeFp = Math.min(1, dt * 10);
       if (this.groundPreset === 'walk') {
-        this.walkTime += dt * 0.24;
-        this.targetFpPos.set(
-          Math.sin(this.walkTime) * 7.5,
-          2.2 + Math.sin(this.walkTime * 6) * 0.03,
-          Math.cos(this.walkTime) * 6.0 + 4.5,
-        );
-        this.targetFpYaw = this.walkTime * 0.65;
-        this.targetFpPitch = 0.17 + Math.sin(this.walkTime * 2) * 0.08;
+        this.walkTime += dt;
+        this.player.setMoveInput(Math.sin(this.walkTime * 0.45) * 0.25, 0.48, false);
+        this.targetFpYaw += dt * 0.22;
+        this.targetFpPitch = 0.15 + Math.sin(this.walkTime * 0.5) * 0.06;
       }
-      const easeFp = Math.min(1, dt * 7.5);
-      this.fpPos.lerp(this.targetFpPos, easeFp);
+
       this.fpYaw += (this.targetFpYaw - this.fpYaw) * easeFp;
       this.fpPitch += (this.targetFpPitch - this.fpPitch) * easeFp;
-      this.groundCamera.position.copy(this.fpPos);
-      this.groundCamera.rotation.set(this.fpPitch, this.fpYaw, 0);
+      this.groundCamDist += (this.targetGroundCamDist - this.groundCamDist) * easeFp;
+
+      this.player.step(
+        dt,
+        this.fpYaw,
+        this.outdoorBounds,
+        groundBowlY,
+        groundBowlSlopeTilt,
+        this.outdoorColliders,
+        true,
+        false,
+        this.simTime,
+      );
+
+      if (this.groundPreset === 'sky') {
+        this.player.avatar.root.visible = false;
+        this.groundCamera.position.set(this.player.pos.x, this.player.pos.y + 2.05, this.player.pos.z);
+        this.groundCamera.rotation.set(this.fpPitch, this.fpYaw, 0);
+      } else {
+        this.player.avatar.root.visible = true;
+        const baseTx = this.player.pos.x;
+        const baseTy = this.player.pos.y + 1.38;
+        const baseTz = this.player.pos.z;
+        const cx = baseTx + Math.sin(this.fpYaw) * Math.cos(this.fpPitch) * this.groundCamDist;
+        const cz = baseTz + Math.cos(this.fpYaw) * Math.cos(this.fpPitch) * this.groundCamDist;
+        const desiredCy = baseTy - Math.sin(this.fpPitch) * this.groundCamDist;
+        const cy = Math.max(groundBowlY(cx, cz) + 0.48, desiredCy);
+        // When clamped near terrain looking skyward, raise look-target smoothly so pitch up to +60° stays responsive
+        const lookTy = cy + Math.sin(this.fpPitch) * this.groundCamDist;
+        this.groundCamera.position.set(cx, cy, cz);
+        this.groundCamera.lookAt(baseTx, lookTy, baseTz);
+      }
+
+      const doorTarget = this.groundBackdrop.getDoorwayTarget();
+      const doorDist = Math.hypot(this.player.pos.x - doorTarget.x, this.player.pos.z - doorTarget.z);
+      const nextDoor = doorDist < 3.6 ? doorTarget : null;
+      if (Boolean(nextDoor) !== Boolean(this.nearbyDoor) || nextDoor?.label !== this.nearbyDoor?.label) {
+        this.nearbyDoor = nextDoor;
+        this.onStateChanged?.();
+      }
+
       this.groundBackdrop.update(dt, this.simTime);
     }
 
@@ -2199,6 +2517,7 @@ export class DioramaEngine {
       this.skyBotHex,
       (hide) => {
         this.fxGroup.visible = !hide;
+        this.player.avatar.shadowMesh.visible = !hide;
         this.ghostGroup.visible =
           !hide && this.viewMode === 'plot' && this.toolMode === 'place' && this.hoverValid;
         for (const wm of this.waterMeshes) {
@@ -2219,6 +2538,7 @@ export class DioramaEngine {
     this.groundBackdrop.dispose();
     this.spaceWorld.dispose();
     this.interiorWorld.dispose();
+    this.player.dispose();
     this.pipeline.dispose();
     this.renderer.dispose();
   }

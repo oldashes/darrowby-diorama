@@ -71,6 +71,8 @@ html.theme-pocket #app {
 html.clean-mode .hud-overlay,
 html.clean-mode .loading-badge,
 html.clean-mode .cylinder-pins,
+html.clean-mode .zelda-controls,
+html.clean-mode .door-prompt,
 html.clean-mode .modal-backdrop {
   display: none !important;
 }
@@ -580,6 +582,115 @@ button.active {
   border-left: 1px solid var(--card-border);
 }
 
+.zelda-controls {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.move-joystick {
+  pointer-events: auto;
+  position: fixed;
+  left: 18px;
+  bottom: 112px;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--glass-bg);
+  border: 1.5px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+
+.joy-knob {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  border: 2px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  transform: translate3d(0, 0, 0);
+}
+
+.action-pad {
+  pointer-events: auto;
+  position: fixed;
+  right: 18px;
+  bottom: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  touch-action: none;
+}
+
+.pad-mini-btn,
+.pad-jump-btn,
+.door-prompt {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  background: var(--glass-bg);
+  border: 1.5px solid var(--glass-border);
+  color: var(--text-main);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+
+.pad-mini-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pad-jump-btn {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  font-size: 11.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2px;
+}
+
+.pad-jump-btn.glide-ready {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.door-prompt {
+  pointer-events: auto;
+  position: fixed;
+  left: 50%;
+  bottom: 118px;
+  transform: translateX(-50%);
+  padding: 7px 15px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-size: 12.5px;
+  font-weight: 700;
+  z-index: 15;
+  white-space: nowrap;
+}
+
 /* Modal */
 .modal-backdrop {
   position: fixed;
@@ -793,5 +904,41 @@ button.active {
 
   .dock-count {
     display: none;
+  }
+
+  .move-joystick {
+    left: 12px;
+    bottom: 124px;
+    width: 84px;
+    height: 84px;
+  }
+
+  .joy-knob {
+    width: 34px;
+    height: 34px;
+  }
+
+  .action-pad {
+    right: 12px;
+    bottom: 124px;
+    gap: 6px;
+  }
+
+  .pad-mini-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+  }
+
+  .pad-jump-btn {
+    width: 52px;
+    height: 52px;
+    font-size: 10.5px;
+  }
+
+  .door-prompt {
+    bottom: 132px;
+    font-size: 11.5px;
+    padding: 6px 12px;
   }
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WorldShaderUniforms, attachStorybookSurfaceShader } from '../assets/modelLibrary';
 import { TimeMode } from './regions';
+import { Collider2D, DoorwayTarget, RoomBounds } from './playerController';
 
 export type InteriorKind = 'tavern' | 'greenhouse';
 
@@ -531,6 +532,46 @@ export class InteriorWorld {
 
   getRoom(): InteriorKind {
     return this.kind;
+  }
+
+  getRoomBounds(kind: InteriorKind): RoomBounds & { height: number } {
+    if (kind === 'tavern') {
+      return { minX: -4.45, maxX: 4.45, minZ: -3.7, maxZ: 3.7, height: 4.2 };
+    }
+    return { minX: -4.25, maxX: 4.25, minZ: -3.6, maxZ: 3.6, height: 4.3 };
+  }
+
+  getColliders(kind: InteriorKind): Collider2D[] {
+    if (kind === 'tavern') {
+      return [
+        // West brick fireplace hearth
+        { kind: 'box', minX: -5.1, maxX: -3.95, minZ: -1.65, maxZ: 1.05 },
+        // East café bar counter + barstools
+        { kind: 'box', minX: 2.05, maxX: 3.95, minZ: -2.95, maxZ: 1.75 },
+        // Center oak dining table
+        { kind: 'circle', x: -0.8, z: -0.8, r: 0.92 },
+        // NE bookshelf
+        { kind: 'box', minX: 2.45, maxX: 4.35, minZ: -4.05, maxZ: -3.35 },
+        // Companion Shiba resting near hearth
+        { kind: 'circle', x: -2.5, z: 0.4, r: 0.45 },
+      ];
+    }
+    return [
+      // West & East cedar potting benches
+      { kind: 'box', minX: -4.1, maxX: -2.55, minZ: -3.15, maxZ: 2.35 },
+      { kind: 'box', minX: 2.55, maxX: 4.1, minZ: -3.15, maxZ: 2.35 },
+      // Center ornamental Jacaranda planter
+      { kind: 'circle', x: 0, z: -1.6, r: 0.85 },
+    ];
+  }
+
+  getExitTarget(kind: InteriorKind): DoorwayTarget {
+    return {
+      x: 0,
+      z: kind === 'tavern' ? 3.55 : 3.45,
+      label: '🚪 推门回到街道 (E)',
+      action: 'exit_interior',
+    };
   }
 
   pickDoor(raycaster: THREE.Raycaster): boolean {

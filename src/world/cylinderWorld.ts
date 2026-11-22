@@ -4,6 +4,7 @@ import {
   attachStorybookSurfaceShader,
 } from '../assets/modelLibrary';
 import { RegionBlueprint, RegionId, SeasonId, TimeMode } from './regions';
+import { Collider2D, DoorwayTarget } from './playerController';
 
 export type ViewMode = 'space' | 'ground' | 'interior' | 'plot';
 export type GroundLookPreset = 'street' | 'sky' | 'walk';
@@ -203,12 +204,18 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 }
 
 /** Ground height of the seamless flat central plain curving smoothly into the R=320 O'Neill cylinder barrel. */
-function groundBowlY(x: number, z: number): number {
+export function groundBowlY(x: number, z: number): number {
   const sinT = Math.min(0.999, Math.abs(x) / CYLINDER_RADIUS);
   const cylY = CYLINDER_RADIUS * (1 - Math.sqrt(1 - sinT * sinT));
   const r = Math.hypot(x, z);
   const blend = smoothstep(52, 130, r);
   return -0.045 + (cylY + 0.045) * blend;
+}
+
+/** Lateral banking angle (radians) matching the O'Neill valley curvature when running up flanks. */
+export function groundBowlSlopeTilt(x: number, z: number): number {
+  const blend = smoothstep(52, 130, Math.hypot(x, z));
+  return Math.atan2(x, CYLINDER_RADIUS) * blend * 0.65;
 }
 
 function buildBottomValleyStripGeometry(arcHalf: number, length: number, radius: number): THREE.BufferGeometry {
@@ -597,6 +604,13 @@ export class GroundBackdropWorld {
   private airships: Array<{ group: THREE.Group; baseX: number; baseY: number; baseZ: number; speed: number; phase: number }> = [];
   private walkers: Array<{ group: THREE.Group; ax: number; az: number; range: number; axis: 'x' | 'z'; phase: number }> = [];
   private doorwayMarker: THREE.Group | null = null;
+  private neighborhoodColliders: Collider2D[] = [];
+  private doorwayTarget: DoorwayTarget = {
+    x: -5.8,
+    z: -4.4,
+    label: '☕ 推门进入「观海驿站酒馆」',
+    action: 'enter_tavern',
+  };
 
   constructor(
     parentScene: THREE.Scene,
@@ -767,6 +781,7 @@ export class GroundBackdropWorld {
       this.neighborhoodGroup.remove(this.neighborhoodGroup.children[0]);
     }
     this.walkers = [];
+    this.neighborhoodColliders = [];
 
     // Stylized Midground Neighborhood outside [-12.5, +12.5] so streets flow naturally into the curving horizon
     const wallMat = this.mkMat(region.palette.wallTone);
@@ -815,6 +830,13 @@ export class GroundBackdropWorld {
       b.add(roof);
 
       this.neighborhoodGroup.add(b);
+      this.neighborhoodColliders.push({
+        kind: 'box',
+        minX: x - w * 0.5,
+        maxX: x + w * 0.5,
+        minZ: z - d * 0.5,
+        maxZ: z + d * 0.5,
+      });
     };
 
     const addTree = (x: number, z: number, sc: number, purple: boolean) => {
@@ -830,6 +852,7 @@ export class GroundBackdropWorld {
       tr.add(trunk, crown);
       tr.scale.setScalar(sc);
       this.neighborhoodGroup.add(tr);
+      this.neighborhoodColliders.push({ kind: 'circle', x, z, r: 0.42 * sc });
     };
 
     // Place charming lower cottages well outside central bay/vista corridor (|x| >= 16.5)
@@ -928,6 +951,26 @@ export class GroundBackdropWorld {
     mk.add(diamond);
     this.doorwayMarker = mk;
     this.neighborhoodGroup.add(mk);
+
+    this.doorwayTarget = {
+      x: doorPos[0],
+      z: doorPos[1] + 1.45,
+      label:
+        region.id === 'darrowby'
+          ? '🌿 进入「玻璃温室花房」 (E)'
+          : region.id === 'wangshi'
+            ? '☕ 进入「网市驿站茶馆」 (E)'
+            : '☕ 进入「观海驿站酒馆」 (E)',
+      action: region.id === 'darrowby' ? 'enter_greenhouse' : 'enter_tavern',
+    };
+  }
+
+  getColliders(): Collider2D[] {
+    return this.neighborhoodColliders;
+  }
+
+  getDoorwayTarget(): DoorwayTarget {
+    return this.doorwayTarget;
   }
 
   applyAtmosphere(timeMode: TimeMode, renderStyle: 'pocket' | 'pixel' | 'hd'): void {

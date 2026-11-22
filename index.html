@@ -34,7 +34,7 @@
               <span id="weather-pill" class="meta-pill">初夏 · 昼</span>
             </div>
             <div id="loc-sub" class="loc-sub">库珀空间站 · 脚下是正常地球街区，抬头即见 R=320m 弯曲倒悬大陆穹顶</div>
-            <div id="field-note" class="field-note">拖拽环顾四周与头顶倒挂城市天际线，WASD/滚轮漫步，点击「推门进屋探索」可进入 MMORPG 室内房间。</div>
+            <div id="field-note" class="field-note">WASD / 左下摇杆自由走跑 · 拖拽 360° 环视与抬头看穹顶 · 空格/右上按钮跳跃，空中再按展开滑翔伞 · 走近门口按 E 进屋。</div>
             <div id="legend-row" class="legend-row"></div>
             <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
@@ -153,6 +153,18 @@
             <button class="cam-btn" data-cam="street">🏘️ 街角</button>
             <button class="cam-btn" data-cam="bird">🦅 鸟瞰</button>
           </div>
+
+          <!-- Zelda-Style Touch Controls & Proximity Door Prompt -->
+          <div id="zelda-controls" class="zelda-controls">
+            <div id="move-joystick" class="move-joystick" aria-label="移动摇杆">
+              <div id="joy-knob" class="joy-knob"></div>
+            </div>
+            <div id="action-pad" class="action-pad">
+              <button id="btn-sprint-toggle" class="pad-mini-btn" title="切换奔跑冲刺 (Shift)">🏃</button>
+              <button id="btn-jump-glide" class="pad-jump-btn" title="跳跃 / 空中展开滑翔伞 (Space)">⬆️ 跳</button>
+            </div>
+          </div>
+          <button id="door-prompt" class="door-prompt hidden">🚪 推门进入室内 (E)</button>
 
           <!-- Main Floating Bottom Dock -->
           <div class="dock-bar">

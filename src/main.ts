@@ -36,6 +36,10 @@ declare global {
     setCameraPreset?: (preset: CameraPresetId) => void;
     placeCatalogItem?: (id: string, x: number, z: number, rotY?: number) => unknown;
     undoLastPlacement?: () => boolean;
+    setMoveInput?: (right: number, forward: number, sprint?: boolean) => void;
+    triggerJumpOrGlide?: () => string;
+    teleportPlayer?: (x: number, z: number) => void;
+    interactNearbyDoor?: () => boolean;
     getDioramaStats?: () => ReturnType<DioramaEngine['getState']>;
     __renderReady?: boolean;
     __modelsLoaded?: boolean;
@@ -88,6 +92,12 @@ function bootstrap(): void {
   const groundBar = document.getElementById('ground-bar');
   const interiorBar = document.getElementById('interior-bar');
   const camPresetsBar = document.getElementById('cam-presets');
+  const zeldaControls = document.getElementById('zelda-controls');
+  const moveJoystick = document.getElementById('move-joystick');
+  const joyKnob = document.getElementById('joy-knob');
+  const btnSprintToggle = document.getElementById('btn-sprint-toggle');
+  const btnJumpGlide = document.getElementById('btn-jump-glide');
+  const doorPrompt = document.getElementById('door-prompt');
 
   const btnDiveGround = document.getElementById('btn-dive-ground');
   const btnEnterInterior = document.getElementById('btn-enter-interior');
@@ -130,6 +140,10 @@ function bootstrap(): void {
   let activeCat: CatalogItem['category'] = 'building';
   let isFetchingCustom = false;
   let lastSpaceDest = 'sydney';
+  let joyPointerId: number | null = null;
+  let joyVec = { x: 0, y: 0 };
+  let qaMoveOverride: { right: number; forward: number; sprint: boolean } | null = null;
+  const heldKeys = new Set<string>();
 
   function renderCatalogStrip(): void {
     if (!catalogStrip) return;
@@ -265,12 +279,12 @@ function bootstrap(): void {
     } else if (view === 'ground') {
       if (locName) locName.textContent = `${st.region.name}（平地视角）`;
       if (locSub) {
-        locSub.textContent = `${st.region.badgeText} · 脚下正常地球街区无缝衔接 R=320m 倒悬天空穹顶`;
+        locSub.textContent = `${st.region.badgeText} · 第三人称自由奔跑 · 可攀上 R=320m 谷坡滑翔`;
       }
       if (fieldNote) {
         fieldNote.textContent =
           activeSpecial?.note ||
-          '拖拽自由环视眼前街区与头顶 120° 倒悬大陆天际线，WASD/滚轮漫步街头，也可推门进入室内或切至沙盘造景。';
+          'WASD / 左摇杆自由走跑，Shift 冲刺，Space / 跳键起跳（空中再按展开滑翔伞）；走近闪烁门标按 E 进屋。';
       }
       if (legendRow) {
         const parts = [
@@ -355,6 +369,19 @@ function bootstrap(): void {
       }
     }
 
+    const showZeldaHud = view === 'ground' || view === 'interior';
+    zeldaControls?.classList.toggle('hidden', !showZeldaHud);
+    btnSprintToggle?.classList.toggle('active', st.sprintToggled);
+
+    if (doorPrompt) {
+      if (showZeldaHud && st.nearbyDoor) {
+        doorPrompt.textContent = st.nearbyDoor.label;
+        doorPrompt.classList.remove('hidden');
+      } else {
+        doorPrompt.classList.add('hidden');
+      }
+    }
+
     renderSpecialScenes();
     renderCatalogStrip();
     window.__modelsLoaded = st.modelsLoaded;
@@ -362,6 +389,20 @@ function bootstrap(): void {
       viewMode: st.viewMode,
       groundPreset: st.groundPreset,
       interiorKind: st.interiorKind,
+      fpYaw: st.fpYaw,
+      fpPitch: st.fpPitch,
+      inYaw: st.inYaw,
+      inPitch: st.inPitch,
+      playerX: st.playerX,
+      playerY: st.playerY,
+      playerZ: st.playerZ,
+      playerFacing: st.playerFacing,
+      playerSpeed: st.playerSpeed,
+      grounded: st.grounded,
+      isGliding: st.isGliding,
+      isSprinting: st.isSprinting,
+      heightAboveGround: st.heightAboveGround,
+      nearbyDoorLabel: st.nearbyDoor?.label ?? null,
       regionId: st.region.id,
       season: st.season,
       timeMode: st.timeMode,
@@ -491,6 +532,14 @@ function bootstrap(): void {
   window.setCameraPreset = (preset) => engine.setCameraPreset(preset);
   window.placeCatalogItem = (id, x, z, rotY) => engine.placeCatalogItem(id, x, z, rotY);
   window.undoLastPlacement = () => engine.undoLastPlacement();
+  window.setMoveInput = (r, f, s) => {
+    qaMoveOverride =
+      Math.abs(r) < 1e-4 && Math.abs(f) < 1e-4 ? null : { right: r, forward: f, sprint: Boolean(s) };
+    engine.setMoveInput(r, f, Boolean(s));
+  };
+  window.triggerJumpOrGlide = () => engine.triggerJumpOrGlide();
+  window.teleportPlayer = (x, z) => engine.teleportPlayer(x, z);
+  window.interactNearbyDoor = () => engine.interactNearbyDoor();
 
   // Wire UI Events
   for (const b of styleBtns) {
@@ -736,7 +785,74 @@ function bootstrap(): void {
     }
   });
 
-  // Canvas tap vs drag-to-look / pinch-to-walk / drag-to-orbit with per-pointerId tracking
+  // Virtual Left Joystick, Action Pad, Pinch-Zoom & Continuous Keyboard (WASD + Shift + Space + E)
+  const updateJoystickFromClient = (clientX: number, clientY: number) => {
+    if (!moveJoystick || !joyKnob) return;
+    const rect = moveJoystick.getBoundingClientRect();
+    const cx = rect.left + rect.width * 0.5;
+    const cy = rect.top + rect.height * 0.5;
+    const maxR = rect.width * 0.36;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR && dist > 1e-4) {
+      dx = (dx / dist) * maxR;
+      dy = (dy / dist) * maxR;
+    }
+    joyVec = { x: dx / maxR, y: -dy / maxR };
+    joyKnob.style.transform = `translate3d(${Math.round(dx)}px, ${Math.round(dy)}px, 0)`;
+    qaMoveOverride = null;
+  };
+
+  const resetJoystick = () => {
+    joyPointerId = null;
+    joyVec = { x: 0, y: 0 };
+    if (joyKnob) joyKnob.style.transform = 'translate3d(0px, 0px, 0)';
+  };
+
+  moveJoystick?.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    joyPointerId = e.pointerId;
+    try {
+      moveJoystick.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore synthetic events
+    }
+    updateJoystickFromClient(e.clientX, e.clientY);
+  });
+  moveJoystick?.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== joyPointerId) return;
+    e.stopPropagation();
+    updateJoystickFromClient(e.clientX, e.clientY);
+  });
+  const endJoystick = (e: PointerEvent) => {
+    if (e.pointerId !== joyPointerId) return;
+    e.stopPropagation();
+    resetJoystick();
+  };
+  moveJoystick?.addEventListener('pointerup', endJoystick);
+  moveJoystick?.addEventListener('pointercancel', endJoystick);
+
+  btnSprintToggle?.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    playUiTick();
+    engine.setSprintToggle(!engine.getState().sprintToggled);
+  });
+
+  btnJumpGlide?.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    const res = engine.triggerJumpOrGlide();
+    if (res !== 'none') playUiTick();
+  });
+
+  doorPrompt?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (engine.interactNearbyDoor()) {
+      playChimeSound();
+    }
+  });
+
+  // Canvas tap vs drag-to-look / pinch-to-zoom / drag-to-orbit with per-pointerId tracking
   const activePointers = new Map<number, { x: number; y: number }>();
   let primaryPointerId: number | null = null;
   let downPt = { x: 0, y: 0 };
@@ -770,7 +886,7 @@ function bootstrap(): void {
       if (activePointers.size >= 2) {
         const dist = getPinchDist();
         if (lastPinchDist !== null) {
-          engine.moveFirstPerson((dist - lastPinchDist) * 0.045, 0);
+          engine.handleFirstPersonWheel((lastPinchDist - dist) * 3.5);
         }
         lastPinchDist = dist;
         return;
@@ -832,11 +948,24 @@ function bootstrap(): void {
     const mode = engine.getState().viewMode;
 
     if (mode === 'ground' || mode === 'interior') {
-      if (k === 'w' || k === 'arrowup') engine.moveFirstPerson(0.75, 0);
-      else if (k === 's' || k === 'arrowdown') engine.moveFirstPerson(-0.75, 0);
-      else if (k === 'a' || k === 'arrowleft') engine.moveFirstPerson(0, -0.65);
-      else if (k === 'd' || k === 'arrowright') engine.moveFirstPerson(0, 0.65);
-      else if (k === 'escape') {
+      if (k === 'w' || k === 's' || k === 'a' || k === 'd' || k.startsWith('arrow') || k === 'shift') {
+        qaMoveOverride = null;
+        heldKeys.add(k);
+        return;
+      }
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        const res = engine.triggerJumpOrGlide();
+        if (res !== 'none') playUiTick();
+        return;
+      }
+      if (k === 'e' && !e.repeat) {
+        if (engine.interactNearbyDoor()) {
+          playChimeSound();
+        }
+        return;
+      }
+      if (k === 'escape') {
         scenePopover?.classList.add('hidden');
         regionModal?.classList.add('hidden');
       }
@@ -851,6 +980,13 @@ function bootstrap(): void {
       regionModal?.classList.add('hidden');
       engine.setToolMode('view');
     }
+  });
+  window.addEventListener('keyup', (e) => {
+    heldKeys.delete(e.key.toLowerCase());
+  });
+  window.addEventListener('blur', () => {
+    heldKeys.clear();
+    resetJoystick();
   });
 
   window.addEventListener('resize', () => {
@@ -918,11 +1054,63 @@ function bootstrap(): void {
 
   syncHud();
 
+  let lastJumpLabel = '';
   let last = performance.now();
   function frame(now: number): void {
     const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
     last = now;
+
+    const stNow = engine.getState();
+    if (stNow.viewMode === 'ground' || stNow.viewMode === 'interior') {
+      if (qaMoveOverride) {
+        engine.setMoveInput(qaMoveOverride.right, qaMoveOverride.forward, qaMoveOverride.sprint);
+      } else {
+        const kbForward =
+          (heldKeys.has('w') || heldKeys.has('arrowup') ? 1 : 0) -
+          (heldKeys.has('s') || heldKeys.has('arrowdown') ? 1 : 0);
+        const kbRight =
+          (heldKeys.has('d') || heldKeys.has('arrowright') ? 1 : 0) -
+          (heldKeys.has('a') || heldKeys.has('arrowleft') ? 1 : 0);
+        const rx = Math.max(-1, Math.min(1, kbRight + joyVec.x));
+        const fz = Math.max(-1, Math.min(1, kbForward + joyVec.y));
+        const shift = heldKeys.has('shift');
+        if (stNow.groundPreset !== 'walk' || Math.hypot(rx, fz) > 0.05) {
+          engine.setMoveInput(rx, fz, shift);
+        }
+      }
+
+      if (btnJumpGlide) {
+        const label =
+          stNow.viewMode === 'ground' && !stNow.grounded
+            ? stNow.isGliding
+              ? '收伞'
+              : '🪂 滑翔'
+            : '⬆️ 跳';
+        if (label !== lastJumpLabel) {
+          lastJumpLabel = label;
+          btnJumpGlide.textContent = label;
+          btnJumpGlide.classList.toggle('glide-ready', label !== '⬆️ 跳');
+        }
+      }
+    }
+
     engine.step(dt);
+
+    // Keep lightweight live stats fresh during motion/gliding tests
+    const stPost = engine.getState();
+    if (window.__stats) {
+      window.__stats.playerX = stPost.playerX;
+      window.__stats.playerY = stPost.playerY;
+      window.__stats.playerZ = stPost.playerZ;
+      window.__stats.fpYaw = stPost.fpYaw;
+      window.__stats.fpPitch = stPost.fpPitch;
+      window.__stats.inYaw = stPost.inYaw;
+      window.__stats.inPitch = stPost.inPitch;
+      window.__stats.grounded = stPost.grounded;
+      window.__stats.isGliding = stPost.isGliding;
+      window.__stats.heightAboveGround = stPost.heightAboveGround;
+    }
+
     syncSpacePins();
     requestAnimationFrame(frame);
   }
