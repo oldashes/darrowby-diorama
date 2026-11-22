@@ -12,17 +12,17 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-Cf364l_h.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-KUCLCdqd.css">
+    <script type="module" crossorigin src="./assets/index-reK8-Qhj.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-UXOgZcVp.css">
   </head>
   <body>
     <div id="app">
       <canvas id="gl-canvas"></canvas>
-      <div id="cylinder-pins" class="cylinder-pins"></div>
+      <div id="space-pins" class="cylinder-pins"></div>
 
       <div id="loading-badge" class="loading-badge">
         <span class="dot"></span>
-        <span>正在加载库珀空间站与 3D 微缩街区...</span>
+        <span>正在构建库珀空间站与 3D 微缩街区...</span>
       </div>
 
       <div class="hud-overlay">
@@ -31,19 +31,21 @@
           <div class="location-card">
             <div class="loc-header">
               <span class="loc-dot"></span>
-              <strong id="loc-name">库珀空间站 · 奥尼尔圆筒</strong>
-              <span id="weather-pill" class="meta-pill">3 大陆带 · 昼</span>
+              <strong id="loc-name">悉尼 · 蓝花楹海湾（平地探索）</strong>
+              <span id="weather-pill" class="meta-pill">初夏 · 昼</span>
             </div>
-            <div id="loc-sub" class="loc-sub">大洋海岸带 · 当前聚焦：悉尼 · 蓝花楹海湾（南半球初夏段）</div>
-            <div id="field-note" class="field-note">滚轮前后穿行气候轴，拖拽环望对岸倒悬大陆；点击地标切换，或直接「进入地块精建」做细部造景。</div>
+            <div id="loc-sub" class="loc-sub">库珀空间站 · 脚下是正常地球街区，抬头即见 R=320m 弯曲倒悬大陆穹顶</div>
+            <div id="field-note" class="field-note">拖拽环顾四周与头顶倒挂城市天际线，WASD/滚轮漫步，点击「推门进屋探索」可进入 MMORPG 室内房间。</div>
             <div id="legend-row" class="legend-row"></div>
             <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
 
           <div class="top-controls">
-            <div class="pill-group" role="group" aria-label="视角层级">
-              <button class="mode-btn active" data-view="cylinder">🌌 圆筒世界</button>
-              <button class="mode-btn" data-view="plot">🏝️ 地块精建</button>
+            <div class="pill-group mode-pill-group" role="group" aria-label="视角层级">
+              <button class="mode-btn" data-view="space">🛰️ 太空视角</button>
+              <button class="mode-btn active" data-view="ground">🚶 平地视角</button>
+              <button class="mode-btn" data-view="interior">🏠 室内视角</button>
+              <button class="mode-btn" data-view="plot">🏝️ 沙盘建造</button>
             </div>
             <div class="pill-group" role="group" aria-label="描边风格">
               <button class="style-btn active" data-style="pocket">📜 建筑师手绘</button>
@@ -51,8 +53,8 @@
               <button class="style-btn" data-style="hd">🎨 绘本描边</button>
             </div>
             <div class="pill-group">
-              <button id="btn-orbit-left" class="icon-btn" title="向左旋转 / 切换大陆带">↺</button>
-              <button id="btn-orbit-right" class="icon-btn" title="向右旋转 / 切换大陆带">↻</button>
+              <button id="btn-orbit-left" class="icon-btn" title="向左转向 / 旋转">↺</button>
+              <button id="btn-orbit-right" class="icon-btn" title="向右转向 / 旋转">↻</button>
               <button id="btn-cam-reset" class="icon-btn" title="重置视角">🧭</button>
             </div>
           </div>
@@ -117,17 +119,31 @@
             <div id="build-hint" class="build-hint">点击地面格点摆放建筑，单指/左键按住拖拽可 360° 旋转岛屿</div>
           </section>
 
-          <!-- Cylinder Explorer Bar -->
-          <div id="cylinder-bar" class="cylinder-bar">
-            <div class="pill-group" role="group" aria-label="大陆风貌带">
-              <button class="strip-btn" data-strip="0">🌏 东亚水乡带</button>
-              <button class="strip-btn" data-strip="1">🏰 欧陆田园带</button>
-              <button class="strip-btn active" data-strip="2">🌊 大洋海岸带</button>
+          <!-- Space Destination Bar -->
+          <div id="space-bar" class="cylinder-bar hidden">
+            <div class="pill-group" role="group" aria-label="外太空降落选区">
+              <button class="space-dest-btn active" data-dest="sydney">🇦🇺 悉尼海湾</button>
+              <button class="space-dest-btn" data-dest="guangzhou">🏮 广州北京路</button>
+              <button class="space-dest-btn" data-dest="wangshi">🇨🇳 监利网市镇</button>
+              <button class="space-dest-btn" data-dest="darrowby">🇬🇧 约克达罗比</button>
+              <button class="space-dest-btn" data-dest="otaru">🇯🇵 小樽雪运河</button>
             </div>
-            <div class="pill-group" role="group" aria-label="圆筒机位">
-              <button class="cyl-cam-btn active" data-cyl-cam="vista">🌌 舱内广角</button>
-              <button class="cyl-cam-btn" data-cyl-cam="tram">🚃 电车漫游</button>
-              <button class="cyl-cam-btn" data-cyl-cam="axis">🛰️ 中轴环览</button>
+          </div>
+
+          <!-- Ground Perspective Bar -->
+          <div id="ground-bar" class="cylinder-bar">
+            <div class="pill-group" role="group" aria-label="平地视线">
+              <button class="ground-cam-btn active" data-ground="street">👀 街景平视</button>
+              <button class="ground-cam-btn" data-ground="sky">🔭 仰望穹顶</button>
+              <button class="ground-cam-btn" data-ground="walk">🚶 环街漫步</button>
+            </div>
+          </div>
+
+          <!-- Interior Room Bar -->
+          <div id="interior-bar" class="cylinder-bar hidden">
+            <div class="pill-group" role="group" aria-label="建筑室内房间">
+              <button class="interior-btn active" data-room="tavern">☕ 观海驿站酒馆</button>
+              <button class="interior-btn" data-room="greenhouse">🌿 玻璃温室花房</button>
             </div>
           </div>
 
@@ -141,11 +157,14 @@
 
           <!-- Main Floating Bottom Dock -->
           <div class="dock-bar">
-            <button id="btn-enter-plot" class="dock-btn">🛠️ 进入地块精建</button>
-            <button id="btn-back-cylinder" class="dock-btn hidden">🌌 返回圆筒大地图</button>
+            <button id="btn-dive-ground" class="dock-btn hidden">🚶 降落平地探索</button>
+            <button id="btn-enter-interior" class="dock-btn">🏠 推门进屋探索</button>
+            <button id="btn-enter-plot-mode" class="dock-btn">🛠️ 沙盘造景</button>
+            <button id="btn-exit-interior" class="dock-btn hidden">🚪 出门回街道</button>
+            <button id="btn-back-ground" class="dock-btn hidden">🚶 回到平地街景</button>
             <button id="btn-toggle-build" class="dock-btn hidden">🧱 建造 / 物料</button>
             <button id="btn-toggle-scene" class="dock-btn">☀️ 场景调节</button>
-            <div id="placed-count-pill" class="dock-count">共 9 座空间站地块</div>
+            <div id="placed-count-pill" class="dock-count">共 30 件微缩物件</div>
           </div>
         </footer>
       </div>
