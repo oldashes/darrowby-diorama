@@ -698,6 +698,10 @@ export class DioramaEngine {
       viewMode: this.viewMode,
       groundPreset: this.groundPreset,
       interiorKind: this.interiorKind,
+      fpYaw: this.fpYaw,
+      fpPitch: this.fpPitch,
+      inYaw: this.inYaw,
+      inPitch: this.inPitch,
       region: this.region,
       season: this.season,
       timeMode: this.timeMode,
@@ -1692,10 +1696,10 @@ export class DioramaEngine {
         this.groundPreset = 'street';
         this.onStateChanged?.();
       }
-      this.targetFpYaw -= dx * 0.0042;
+      this.targetFpYaw += dx * 0.0042;
       this.targetFpPitch = Math.max(-0.35, Math.min(1.05, this.targetFpPitch + dy * 0.0042));
     } else if (this.viewMode === 'interior') {
-      this.targetInYaw -= dx * 0.0045;
+      this.targetInYaw += dx * 0.0045;
       this.targetInPitch = Math.max(-0.55, Math.min(0.65, this.targetInPitch + dy * 0.0045));
     }
   }

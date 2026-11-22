@@ -736,22 +736,48 @@ function bootstrap(): void {
     }
   });
 
-  // Canvas tap vs drag-to-look / drag-to-orbit disambiguation (6px threshold)
+  // Canvas tap vs drag-to-look / pinch-to-walk / drag-to-orbit with per-pointerId tracking
+  const activePointers = new Map<number, { x: number; y: number }>();
+  let primaryPointerId: number | null = null;
   let downPt = { x: 0, y: 0 };
-  let lastPt = { x: 0, y: 0 };
-  let isDown = false;
+  let lastPinchDist: number | null = null;
+  let hadMultiTouch = false;
+
+  const getPinchDist = (): number => {
+    const pts = Array.from(activePointers.values());
+    return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+  };
+
   canvas.addEventListener('pointerdown', (e) => {
-    isDown = true;
-    downPt = { x: e.clientX, y: e.clientY };
-    lastPt = { x: e.clientX, y: e.clientY };
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 1) {
+      primaryPointerId = e.pointerId;
+      downPt = { x: e.clientX, y: e.clientY };
+      hadMultiTouch = false;
+      lastPinchDist = null;
+    } else if (activePointers.size === 2) {
+      hadMultiTouch = true;
+      lastPinchDist = getPinchDist();
+    }
   });
   canvas.addEventListener('pointermove', (e) => {
+    const prev = activePointers.get(e.pointerId);
+    if (prev) {
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
     const mode = engine.getState().viewMode;
     if (mode === 'ground' || mode === 'interior') {
-      if (isDown) {
-        const dx = e.clientX - lastPt.x;
-        const dy = e.clientY - lastPt.y;
-        lastPt = { x: e.clientX, y: e.clientY };
+      if (activePointers.size >= 2) {
+        const dist = getPinchDist();
+        if (lastPinchDist !== null) {
+          engine.moveFirstPerson((dist - lastPinchDist) * 0.045, 0);
+        }
+        lastPinchDist = dist;
+        return;
+      }
+      if (activePointers.size === 1 && e.pointerId === primaryPointerId && prev) {
+        const dx = e.clientX - prev.x;
+        const dy = e.clientY - prev.y;
         engine.handleFirstPersonDrag(dx, dy);
       }
       return;
@@ -760,25 +786,34 @@ function bootstrap(): void {
       engine.updateHover(e.clientX, e.clientY);
     }
   });
-  canvas.addEventListener('pointerup', (e) => {
-    if (!isDown) return;
-    isDown = false;
-    const dist = Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y);
-    if (dist <= 6) {
-      const st = engine.getState();
-      if (st.viewMode === 'interior') {
-        if (engine.handleInteriorTap(e.clientX, e.clientY)) {
-          playUiTick();
-          switchView('ground');
+  const handlePointerEnd = (e: PointerEvent, isRelease: boolean): void => {
+    const wasPrimary = e.pointerId === primaryPointerId;
+    activePointers.delete(e.pointerId);
+    lastPinchDist = null;
+
+    if (isRelease && !hadMultiTouch && wasPrimary && activePointers.size === 0) {
+      const dist = Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y);
+      if (dist <= 6) {
+        const st = engine.getState();
+        if (st.viewMode === 'interior') {
+          if (engine.handleInteriorTap(e.clientX, e.clientY)) {
+            playUiTick();
+            switchView('ground');
+          }
+        } else if (st.viewMode === 'plot') {
+          engine.handleTap(e.clientX, e.clientY);
         }
-      } else if (st.viewMode === 'plot') {
-        engine.handleTap(e.clientX, e.clientY);
       }
     }
-  });
-  canvas.addEventListener('pointercancel', () => {
-    isDown = false;
-  });
+
+    if (activePointers.size === 1) {
+      primaryPointerId = activePointers.keys().next().value ?? null;
+    } else if (activePointers.size === 0) {
+      primaryPointerId = null;
+    }
+  };
+  canvas.addEventListener('pointerup', (e) => handlePointerEnd(e, true));
+  canvas.addEventListener('pointercancel', (e) => handlePointerEnd(e, false));
   canvas.addEventListener(
     'wheel',
     (e) => {
