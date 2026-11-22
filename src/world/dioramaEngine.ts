@@ -25,15 +25,12 @@ import {
   makePlacementId,
 } from './regions';
 import {
-  CONTINENT_STRIPS,
-  CYLINDER_RADIUS,
-  ContinentStripId,
-  CylinderCameraPreset,
-  CylinderPlotDef,
-  CylinderWorld,
-  ProjectedPlotPin,
+  GroundBackdropWorld,
+  GroundLookPreset,
   ViewMode,
 } from './cylinderWorld';
+import { InteriorKind, InteriorWorld } from './interiorWorld';
+import { SpaceSectorPin, SpaceWorld } from './spaceWorld';
 
 export type BuildToolMode = 'view' | 'place' | 'delete';
 
@@ -469,13 +466,19 @@ function buildOsmFacadeTexture(wallHex: string, isHighrise: boolean): THREE.Canv
 export class DioramaEngine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly cylinderScene = new THREE.Scene();
+  readonly spaceScene = new THREE.Scene();
+  readonly interiorScene = new THREE.Scene();
   readonly camera: THREE.OrthographicCamera;
-  readonly cylinderCamera: THREE.PerspectiveCamera;
+  readonly groundCamera: THREE.PerspectiveCamera;
+  readonly spaceCamera: THREE.PerspectiveCamera;
+  readonly interiorCamera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
+  readonly spaceControls: OrbitControls;
   private pipeline = new InkPipeline();
   private models = new ModelLibrary();
-  private cylinderWorld: CylinderWorld;
+  private groundBackdrop: GroundBackdropWorld;
+  private spaceWorld: SpaceWorld;
+  private interiorWorld: InteriorWorld;
 
   private uniforms: WorldShaderUniforms = {
     uSnowCoverage: { value: 1.0 },
@@ -488,10 +491,8 @@ export class DioramaEngine {
 
   private hemiLight = new THREE.HemisphereLight('#d6e5f2', '#9b8d79', 1.18);
   private sunLight = new THREE.DirectionalLight('#fff2da', 1.65);
-  private cylinderHemi = new THREE.HemisphereLight('#e5eef8', '#c6d6b6', 1.05);
-  private cylinderDir = new THREE.DirectionalLight('#fff2da', 0.95);
-  private cylinderAxisA = new THREE.PointLight('#fff4de', 1.18, 0, 0);
-  private cylinderAxisB = new THREE.PointLight('#fff0d2', 1.18, 0, 0);
+  private spaceHemi = new THREE.HemisphereLight('#d8e8f8', '#526074', 0.85);
+  private spaceSun = new THREE.DirectionalLight('#fff4de', 2.05);
 
   private islandGroup = new THREE.Group();
   private placedGroup = new THREE.Group();
@@ -502,6 +503,7 @@ export class DioramaEngine {
   private icicleGroup = new THREE.Group();
   private cascadeGroup = new THREE.Group();
   private groundMesh: THREE.Mesh | null = null;
+  private cliffMesh: THREE.Mesh | null = null;
   private groundMat: THREE.MeshLambertMaterial | null = null;
   private cliffMat: THREE.MeshLambertMaterial | null = null;
   private waterMat: THREE.MeshLambertMaterial | null = null;
@@ -522,21 +524,23 @@ export class DioramaEngine {
   private pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.02);
 
   // Public reactive state
-  private viewMode: ViewMode = 'cylinder';
-  private cylinderStrip: ContinentStripId = 2;
-  private cylinderPreset: CylinderCameraPreset = 'vista';
-  private focusedPlotId = 'sydney';
-  private rollAngle = CONTINENT_STRIPS[2].theta;
-  private targetRollAngle = CONTINENT_STRIPS[2].theta;
-  private axialZ = 82;
-  private targetAxialZ = 82;
-  private camHeight = 18.5;
-  private targetCamHeight = 18.5;
-  private camYaw = 0;
-  private targetCamYaw = 0;
-  private camPitch = -0.10;
-  private targetCamPitch = -0.10;
-  private tramTime = 0;
+  private viewMode: ViewMode = 'ground';
+  private groundPreset: GroundLookPreset = 'street';
+  private interiorKind: InteriorKind = 'tavern';
+  private fpPos = new THREE.Vector3(0.4, 2.25, 11.4);
+  private targetFpPos = new THREE.Vector3(0.4, 2.25, 11.4);
+  private fpYaw = 0.04;
+  private targetFpYaw = 0.04;
+  private fpPitch = 0.13;
+  private targetFpPitch = 0.13;
+  private walkTime = 0;
+
+  private inPos = new THREE.Vector3(1.35, 1.72, 2.95);
+  private targetInPos = new THREE.Vector3(1.35, 1.72, 2.95);
+  private inYaw = 0.24;
+  private targetInYaw = 0.24;
+  private inPitch = -0.02;
+  private targetInPitch = -0.02;
 
   private region: RegionBlueprint = cloneBlueprint(PRESET_REGIONS.sydney);
   private season: SeasonId = 'summer';
@@ -590,10 +594,19 @@ export class DioramaEngine {
     this.camera.position.set(18.5, 16.5, 18.5);
     this.camera.lookAt(0, 0.3, 0);
 
-    this.cylinderCamera = new THREE.PerspectiveCamera(64, aspect, 0.8, 460);
-    this.cylinderCamera.rotation.order = 'YXZ';
-    this.cylinderCamera.position.set(0, -CYLINDER_RADIUS + this.camHeight, this.axialZ);
-    this.cylinderCamera.rotation.set(this.camPitch, this.camYaw, 0);
+    this.groundCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 68 : 58, aspect, 0.25, 1800);
+    this.groundCamera.rotation.order = 'YXZ';
+    this.groundCamera.position.copy(this.fpPos);
+    this.groundCamera.rotation.set(this.fpPitch, this.fpYaw, 0);
+
+    this.spaceCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 54 : 44, aspect, 0.5, 1200);
+    this.spaceCamera.position.set(42, 16, 68);
+    this.spaceCamera.lookAt(0, 0, 0);
+
+    this.interiorCamera = new THREE.PerspectiveCamera(aspect < 1.0 ? 70 : 62, aspect, 0.1, 80);
+    this.interiorCamera.rotation.order = 'YXZ';
+    this.interiorCamera.position.copy(this.inPos);
+    this.interiorCamera.rotation.set(this.inPitch, this.inYaw, 0);
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
@@ -609,6 +622,16 @@ export class DioramaEngine {
     this.controls.addEventListener('start', () => {
       this.cameraTween = null;
     });
+
+    this.spaceControls = new OrbitControls(this.spaceCamera, canvas);
+    this.spaceControls.enableDamping = true;
+    this.spaceControls.dampingFactor = 0.07;
+    this.spaceControls.enablePan = false;
+    this.spaceControls.minDistance = 24;
+    this.spaceControls.maxDistance = 135;
+    this.spaceControls.target.set(0, 0, 0);
+    this.spaceControls.enabled = this.viewMode === 'space';
+    this.spaceControls.update();
 
     this.sunLight.position.set(16, 22, 12);
     this.sunLight.castShadow = true;
@@ -631,17 +654,13 @@ export class DioramaEngine {
     this.scene.add(this.fxGroup);
     this.scene.add(this.ghostGroup);
 
-    this.cylinderDir.position.set(12, 24, 18);
-    this.cylinderAxisA.position.set(0, 0, -34);
-    this.cylinderAxisB.position.set(0, 0, 34);
-    this.cylinderScene.add(
-      this.cylinderHemi,
-      this.cylinderDir,
-      this.cylinderAxisA,
-      this.cylinderAxisB,
-    );
-    this.cylinderWorld = new CylinderWorld(this.cylinderScene, this.uniforms);
-    this.cylinderWorld.root.rotation.z = -this.rollAngle;
+    this.groundBackdrop = new GroundBackdropWorld(this.scene, this.uniforms);
+
+    this.spaceSun.position.set(55, 40, 38);
+    this.spaceScene.add(this.spaceHemi, this.spaceSun);
+    this.spaceWorld = new SpaceWorld(this.spaceScene, this.uniforms);
+
+    this.interiorWorld = new InteriorWorld(this.interiorScene, this.uniforms);
 
     this.initWeatherAndFx();
     this.rebuildIslandGeometry();
@@ -677,11 +696,8 @@ export class DioramaEngine {
 
     return {
       viewMode: this.viewMode,
-      cylinderStrip: this.cylinderStrip,
-      cylinderPreset: this.cylinderPreset,
-      focusedPlotId: this.focusedPlotId,
-      focusedPlot: this.cylinderWorld.getPlotById(this.focusedPlotId),
-      cylinderPlotCount: this.cylinderWorld.getPlots().length,
+      groundPreset: this.groundPreset,
+      interiorKind: this.interiorKind,
       region: this.region,
       season: this.season,
       timeMode: this.timeMode,
@@ -767,6 +783,8 @@ export class DioramaEngine {
     this.osmTextures = [];
 
     const snowy = this.isSnowyGround();
+    this.groundBackdrop.rebuildForRegion(this.region, this.season, snowy);
+    this.groundBackdrop.root.visible = this.viewMode === 'ground';
     this.groundTex = buildIslandGroundTexture(this.region, this.season, snowy);
     this.cliffTex = buildCliffTexture(this.region);
 
@@ -790,12 +808,14 @@ export class DioramaEngine {
     this.groundMesh.castShadow = true;
     this.islandGroup.add(this.groundMesh);
 
-    // Carved Layered Cliff Base (21.65 x 2.75 x 21.65) so turf edge slightly overhangs cleanly!
+    // Carved Layered Cliff Base (21.65 x 2.75 x 21.65) so turf edge slightly overhangs cleanly in plot mode!
     const baseGeo = new THREE.BoxGeometry(ISLAND_HALF * 2 - 0.34, 2.75, ISLAND_HALF * 2 - 0.34);
     const baseMesh = new THREE.Mesh(baseGeo, this.cliffMat);
     baseMesh.position.set(0, -1.65, 0);
     baseMesh.receiveShadow = true;
     baseMesh.castShadow = true;
+    baseMesh.visible = this.viewMode === 'plot';
+    this.cliffMesh = baseMesh;
     this.islandGroup.add(baseMesh);
 
     // Translucent Ice / Water Overlay + Waterfall Cascade & Hanging Winter Icicles
@@ -1364,27 +1384,28 @@ export class DioramaEngine {
     this.uniforms.uWindowGlow.value = windowGlow;
     this.uniforms.uSkyTint.value.set(skyTint);
 
-    // Sync O'Neill Cylinder atmospheric perspective, axial sun/moon illumination, and skylight stars
-    const cylFogHex = isDarkSky
-      ? '#141d31'
+    // Aerial perspective haze exclusively in first-person ground view so overhead cities stay crisp yet atmospheric
+    const groundHazeHex = isDarkSky
+      ? '#10182b'
       : this.timeMode === 'sunset'
-        ? '#cfa186'
+        ? '#dfb59a'
         : this.renderStyle === 'hd'
-          ? '#bcd3e0'
-          : '#ebe5d6';
-    this.cylinderScene.background = new THREE.Color(cylFogHex);
-    this.cylinderScene.fog = new THREE.Fog(cylFogHex, 96, 340);
-    this.cylinderHemi.color.set(hemiSky);
-    this.cylinderHemi.groundColor.set(hemiGnd);
-    this.cylinderHemi.intensity = isDarkSky ? 0.65 : 1.02;
-    this.cylinderDir.color.set(sunCol);
-    this.cylinderDir.intensity = isDarkSky ? 0.36 : 0.92;
-    const axisIntensity = isDarkSky ? 0.48 : this.timeMode === 'sunset' ? 1.05 : 1.24;
-    this.cylinderAxisA.color.set(sunCol);
-    this.cylinderAxisB.color.set(sunCol);
-    this.cylinderAxisA.intensity = axisIntensity;
-    this.cylinderAxisB.intensity = axisIntensity;
-    this.cylinderWorld.applyAtmosphere(this.timeMode, this.renderStyle);
+          ? '#bfe0ef'
+          : '#cfe3ee';
+    if (this.viewMode === 'ground') {
+      this.scene.background = new THREE.Color(groundHazeHex);
+      this.scene.fog = new THREE.Fog(groundHazeHex, 210, 1220);
+    } else {
+      this.scene.fog = null;
+    }
+
+    this.groundBackdrop.applyAtmosphere(this.timeMode, this.renderStyle);
+    this.spaceWorld.applyAtmosphere(this.timeMode);
+    this.interiorWorld.applyAtmosphere(this.timeMode);
+
+    this.spaceSun.color.set(this.timeMode === 'sunset' ? '#ffbc8a' : '#fff4de');
+    this.spaceSun.intensity = isDarkSky ? 0.55 : 2.1;
+    this.spaceHemi.intensity = isDarkSky ? 0.42 : 0.88;
 
     for (const e of [...this.placedEntries, ...this.festiveEntries]) {
       if (e.asset.pointLight) {
@@ -1396,8 +1417,9 @@ export class DioramaEngine {
       }
     }
 
-    // Weather visuals
+    // Weather visuals (scale particles down in perspective ground view so blossoms/flakes stay delicate)
     if (this.weatherPoints && this.weatherMat) {
+      const pScale = this.viewMode === 'ground' ? 0.34 : 1.0;
       const isJacarandaBreeze =
         this.region.id === 'sydney' &&
         (this.season === 'summer' || this.season === 'spring') &&
@@ -1405,32 +1427,32 @@ export class DioramaEngine {
       if (this.weather === 'snow') {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#ffffff');
-        this.weatherMat.size = 0.19;
+        this.weatherMat.size = 0.19 * pScale;
         this.weatherMat.opacity = 0.88;
       } else if (this.weather === 'rain') {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#a8d4eb');
-        this.weatherMat.size = 0.14;
+        this.weatherMat.size = 0.14 * pScale;
         this.weatherMat.opacity = 0.72;
       } else if (isJacarandaBreeze) {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#bca0f5');
-        this.weatherMat.size = 0.16;
+        this.weatherMat.size = 0.16 * pScale;
         this.weatherMat.opacity = 0.8;
       } else if (isSnowy && this.weather === 'breeze') {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#ffffff');
-        this.weatherMat.size = 0.16;
+        this.weatherMat.size = 0.16 * pScale;
         this.weatherMat.opacity = 0.62;
       } else if (this.season === 'autumn' && this.weather === 'breeze') {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#e08a42');
-        this.weatherMat.size = 0.16;
+        this.weatherMat.size = 0.16 * pScale;
         this.weatherMat.opacity = 0.75;
       } else if (this.season === 'spring' && this.weather === 'breeze') {
         this.weatherPoints.visible = true;
         this.weatherMat.color.set('#f8d7df');
-        this.weatherMat.size = 0.15;
+        this.weatherMat.size = 0.15 * pScale;
         this.weatherMat.opacity = 0.7;
       } else {
         this.weatherPoints.visible = false;
@@ -1605,157 +1627,122 @@ export class DioramaEngine {
   }
 
   setViewMode(mode: ViewMode): void {
-    const enteringCylinder = mode === 'cylinder' && this.viewMode !== 'cylinder';
     this.viewMode = mode;
     this.controls.enabled = mode === 'plot';
-    if (mode === 'cylinder') {
+    this.spaceControls.enabled = mode === 'space';
+    this.groundBackdrop.root.visible = mode === 'ground';
+    if (this.cliffMesh) this.cliffMesh.visible = mode === 'plot';
+
+    if (mode !== 'plot') {
       this.ghostGroup.visible = false;
       this.hoverValid = false;
-      if (enteringCylinder) {
-        this.rollAngle = this.targetRollAngle;
-        this.axialZ = this.targetAxialZ;
-        this.camHeight = this.targetCamHeight;
-        this.camYaw = this.targetCamYaw;
-        this.camPitch = this.targetCamPitch;
-      }
     } else {
       this.rebuildGhostPreview();
     }
+
+    if (mode === 'interior') {
+      const autoRoom: InteriorKind = this.region.id === 'darrowby' ? 'greenhouse' : 'tavern';
+      this.setInteriorKind(autoRoom);
+    } else if (mode === 'ground') {
+      this.walkTime = 0;
+    }
+
     this.applyAtmosphere();
     this.onStateChanged?.();
   }
 
-  setCylinderStrip(strip: ContinentStripId): void {
-    this.cylinderStrip = strip;
-    const desired = CONTINENT_STRIPS[strip].theta;
-    const diff = Math.atan2(
-      Math.sin(desired - this.targetRollAngle),
-      Math.cos(desired - this.targetRollAngle),
-    );
-    this.targetRollAngle += diff;
-
-    // Select nearest plot on the chosen continent strip
-    const candidates = this.cylinderWorld.getPlots().filter((p) => p.strip === strip);
-    if (candidates.length > 0) {
-      candidates.sort(
-        (a, b) => Math.abs(a.axialZ - this.targetAxialZ) - Math.abs(b.axialZ - this.targetAxialZ),
-      );
-      this.focusedPlotId = candidates[0].id;
-    }
-    this.onStateChanged?.();
-  }
-
-  setCylinderCameraPreset(preset: CylinderCameraPreset): void {
-    this.cylinderPreset = preset;
-    const focused = this.cylinderWorld.getPlotById(this.focusedPlotId);
-    const aspect = this.cylinderCamera.aspect || 1.6;
-    if (preset === 'vista') {
-      this.targetCamHeight = aspect < 1.0 ? 16.5 : 18.5;
-      this.targetCamYaw = 0;
-      this.targetCamPitch = aspect < 1.0 ? -0.16 : -0.10;
-      this.cylinderCamera.fov = aspect < 1.0 ? 74 : 66;
-      this.cylinderCamera.updateProjectionMatrix();
-      if (focused) {
-        this.targetAxialZ = Math.max(-62, Math.min(82, focused.axialZ + (aspect < 1.0 ? 40 : 37)));
-      }
-    } else if (preset === 'tram') {
-      this.targetCamHeight = 7.4;
-      this.targetCamYaw = 0;
-      this.targetCamPitch = 0.08;
-      this.cylinderCamera.fov = aspect < 1.0 ? 70 : 62;
-      this.cylinderCamera.updateProjectionMatrix();
+  setGroundLookPreset(preset: GroundLookPreset): void {
+    this.groundPreset = preset;
+    if (preset === 'street') {
+      this.targetFpPos.set(0.4, 2.25, 11.4);
+      this.targetFpYaw = 0.04;
+      this.targetFpPitch = 0.13;
+    } else if (preset === 'sky') {
+      this.targetFpPos.set(0.0, 2.0, 10.6);
+      this.targetFpYaw = 0.0;
+      this.targetFpPitch = 0.44;
     } else {
-      this.targetCamHeight = 48;
-      this.targetCamYaw = 0;
-      this.targetCamPitch = -0.02;
-      this.targetAxialZ = 76;
-      this.cylinderCamera.fov = aspect < 1.0 ? 76 : 68;
-      this.cylinderCamera.updateProjectionMatrix();
+      this.walkTime = 0;
     }
     this.onStateChanged?.();
   }
 
-  focusCylinderPlot(plotId: string): CylinderPlotDef | null {
-    const plot = this.cylinderWorld.getPlotById(plotId);
-    if (!plot) return null;
-    this.focusedPlotId = plot.id;
-    this.cylinderPreset = 'vista';
-    this.cylinderStrip = plot.strip;
-    const desired = CONTINENT_STRIPS[plot.strip].theta;
-    const diff = Math.atan2(
-      Math.sin(desired - this.targetRollAngle),
-      Math.cos(desired - this.targetRollAngle),
-    );
-    this.targetRollAngle += diff;
-    const aspect = this.cylinderCamera.aspect || 1.6;
-    this.targetCamHeight = aspect < 1.0 ? 16.5 : 18.5;
-    this.targetCamYaw = 0;
-    this.targetCamPitch = aspect < 1.0 ? -0.16 : -0.10;
-    this.targetAxialZ = Math.max(-62, Math.min(82, plot.axialZ + (aspect < 1.0 ? 40 : 37)));
-    this.cylinderCamera.fov = aspect < 1.0 ? 74 : 66;
-    this.cylinderCamera.updateProjectionMatrix();
+  setInteriorKind(kind: InteriorKind): void {
+    this.interiorKind = kind;
+    this.interiorWorld.setRoom(kind);
+    if (kind === 'tavern') {
+      this.inPos.set(1.35, 1.72, 2.95);
+      this.targetInPos.set(1.35, 1.72, 2.95);
+      this.inYaw = 0.24;
+      this.targetInYaw = 0.24;
+    } else {
+      this.inPos.set(0.1, 1.7, 3.05);
+      this.targetInPos.set(0.1, 1.7, 3.05);
+      this.inYaw = 0.04;
+      this.targetInYaw = 0.04;
+    }
+    this.inPitch = -0.02;
+    this.targetInPitch = -0.02;
     this.onStateChanged?.();
-    return plot;
   }
 
-  registerCustomPlotInCylinder(label: string, lat: number, lon: number): CylinderPlotDef {
-    const plot = this.cylinderWorld.upsertCustomPlot(label, lat, lon);
-    this.focusedPlotId = plot.id;
-    this.cylinderStrip = plot.strip;
-    const desired = CONTINENT_STRIPS[plot.strip].theta;
-    const diff = Math.atan2(
-      Math.sin(desired - this.targetRollAngle),
-      Math.cos(desired - this.targetRollAngle),
-    );
-    this.targetRollAngle += diff;
-    this.targetAxialZ = Math.max(-62, Math.min(82, plot.axialZ + 37));
-    this.onStateChanged?.();
-    return plot;
-  }
-
-  handleCylinderDrag(dx: number, dy: number): void {
-    if (this.cylinderPreset === 'axis') {
-      this.targetRollAngle -= dx * 0.0055;
-      this.targetCamPitch = Math.max(-0.45, Math.min(0.45, this.targetCamPitch + dy * 0.004));
-      return;
+  handleFirstPersonDrag(dx: number, dy: number): void {
+    if (this.viewMode === 'ground') {
+      if (this.groundPreset === 'walk') {
+        this.groundPreset = 'street';
+        this.onStateChanged?.();
+      }
+      this.targetFpYaw -= dx * 0.0042;
+      this.targetFpPitch = Math.max(-0.35, Math.min(1.05, this.targetFpPitch + dy * 0.0042));
+    } else if (this.viewMode === 'interior') {
+      this.targetInYaw -= dx * 0.0045;
+      this.targetInPitch = Math.max(-0.55, Math.min(0.65, this.targetInPitch + dy * 0.0045));
     }
-    this.targetCamYaw = Math.max(-1.05, Math.min(1.05, this.targetCamYaw - dx * 0.0045));
-    this.targetCamPitch = Math.max(-0.35, Math.min(1.05, this.targetCamPitch + dy * 0.0045));
   }
 
-  handleCylinderWheel(deltaY: number): void {
-    if (this.cylinderPreset === 'tram') {
-      this.cylinderPreset = 'vista';
-      this.targetCamHeight = 18.5;
-      this.onStateChanged?.();
+  moveFirstPerson(forward: number, right: number): void {
+    if (this.viewMode === 'ground') {
+      if (this.groundPreset === 'walk') {
+        this.groundPreset = 'street';
+        this.onStateChanged?.();
+      }
+      const sinY = Math.sin(this.targetFpYaw);
+      const cosY = Math.cos(this.targetFpYaw);
+      const nx = this.targetFpPos.x - sinY * forward + cosY * right;
+      const nz = this.targetFpPos.z - cosY * forward - sinY * right;
+      this.targetFpPos.x = Math.max(-26, Math.min(26, nx));
+      this.targetFpPos.z = Math.max(-26, Math.min(26, nz));
+    } else if (this.viewMode === 'interior') {
+      const sinY = Math.sin(this.targetInYaw);
+      const cosY = Math.cos(this.targetInYaw);
+      const nx = this.targetInPos.x - sinY * forward + cosY * right;
+      const nz = this.targetInPos.z - cosY * forward - sinY * right;
+      this.targetInPos.x = Math.max(-3.9, Math.min(3.9, nx));
+      this.targetInPos.z = Math.max(-3.1, Math.min(3.3, nz));
     }
-    this.targetAxialZ = Math.max(-66, Math.min(84, this.targetAxialZ + deltaY * 0.035));
   }
 
-  nudgeCylinder(dAxial: number, dRoll: number): void {
-    if (this.cylinderPreset === 'tram' && Math.abs(dAxial) > 0) {
-      this.cylinderPreset = 'vista';
-      this.targetCamHeight = 18.5;
-    }
-    this.targetAxialZ = Math.max(-66, Math.min(84, this.targetAxialZ + dAxial));
-    this.targetRollAngle += dRoll;
+  handleFirstPersonWheel(deltaY: number): void {
+    const step = -deltaY * 0.025;
+    this.moveFirstPerson(step, 0);
   }
 
-  handleCylinderTap(clientX: number, clientY: number): CylinderPlotDef | null {
+  handleInteriorTap(clientX: number, clientY: number): boolean {
+    if (this.viewMode !== 'interior') return false;
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
       -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
     );
-    this.raycaster.setFromCamera(ndc, this.cylinderCamera);
-    return this.cylinderWorld.pickPlot(this.raycaster);
+    this.raycaster.setFromCamera(ndc, this.interiorCamera);
+    return this.interiorWorld.pickDoor(this.raycaster);
   }
 
-  getProjectedCylinderPins(): ProjectedPlotPin[] {
-    if (this.viewMode !== 'cylinder') return [];
+  getProjectedSpacePins(): SpaceSectorPin[] {
+    if (this.viewMode !== 'space') return [];
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    return this.cylinderWorld.getProjectedPins(this.cylinderCamera, w, h, this.focusedPlotId);
+    return this.spaceWorld.getProjectedPins(this.spaceCamera, w, h);
   }
 
   setCameraPreset(preset: CameraPresetId): void {
@@ -1796,9 +1783,21 @@ export class DioramaEngine {
   }
 
   orbitRotateBy(deltaAzimuthRad: number): void {
-    if (this.viewMode === 'cylinder') {
-      const step = deltaAzimuthRad > 0 ? 1 : 2;
-      this.setCylinderStrip(((this.cylinderStrip + step) % 3) as ContinentStripId);
+    if (this.viewMode === 'space') {
+      const offset = this.spaceCamera.position.clone().sub(this.spaceControls.target);
+      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), deltaAzimuthRad);
+      this.spaceCamera.position.copy(this.spaceControls.target).add(offset);
+      this.spaceControls.update();
+      return;
+    }
+    if (this.viewMode === 'ground') {
+      if (this.groundPreset === 'walk') this.groundPreset = 'street';
+      this.targetFpYaw += deltaAzimuthRad;
+      this.onStateChanged?.();
+      return;
+    }
+    if (this.viewMode === 'interior') {
+      this.targetInYaw += deltaAzimuthRad;
       return;
     }
     const offset = this.camera.position.clone().sub(this.controls.target);
@@ -1823,8 +1822,18 @@ export class DioramaEngine {
   }
 
   resetCamera(): void {
-    if (this.viewMode === 'cylinder') {
-      this.setCylinderCameraPreset('vista');
+    if (this.viewMode === 'space') {
+      this.spaceCamera.position.set(42, 16, 68);
+      this.spaceControls.target.set(0, 0, 0);
+      this.spaceControls.update();
+      return;
+    }
+    if (this.viewMode === 'ground') {
+      this.setGroundLookPreset('street');
+      return;
+    }
+    if (this.viewMode === 'interior') {
+      this.setInteriorKind(this.interiorKind);
       return;
     }
     this.setCameraOrbit(Math.PI * 0.25, 0.88, 1.0);
@@ -1959,10 +1968,17 @@ export class DioramaEngine {
     this.camera.bottom = -f / 2;
     this.camera.updateProjectionMatrix();
 
-    this.cylinderCamera.aspect = aspect;
-    this.cylinderCamera.fov =
-      aspect < 1.0 ? 74 : this.cylinderPreset === 'axis' ? 68 : this.cylinderPreset === 'tram' ? 62 : 66;
-    this.cylinderCamera.updateProjectionMatrix();
+    this.groundCamera.aspect = aspect;
+    this.groundCamera.fov = aspect < 1.0 ? 68 : 58;
+    this.groundCamera.updateProjectionMatrix();
+
+    this.spaceCamera.aspect = aspect;
+    this.spaceCamera.fov = aspect < 1.0 ? 54 : 44;
+    this.spaceCamera.updateProjectionMatrix();
+
+    this.interiorCamera.aspect = aspect;
+    this.interiorCamera.fov = aspect < 1.0 ? 70 : 62;
+    this.interiorCamera.updateProjectionMatrix();
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     this.renderer.setPixelRatio(dpr);
@@ -1983,28 +1999,43 @@ export class DioramaEngine {
             : 0.0;
     const isDarkSky = this.timeMode === 'night' || this.timeMode === 'eclipse';
 
-    if (this.viewMode === 'cylinder') {
-      if (this.cylinderPreset === 'tram') {
-        this.tramTime += dt;
-        this.targetAxialZ = Math.cos(this.tramTime * 0.14) * 62;
-      }
-
-      const ease = Math.min(1, dt * 8.5);
-      this.rollAngle += (this.targetRollAngle - this.rollAngle) * ease;
-      this.axialZ += (this.targetAxialZ - this.axialZ) * ease;
-      this.camHeight += (this.targetCamHeight - this.camHeight) * ease;
-      this.camYaw += (this.targetCamYaw - this.camYaw) * ease;
-      this.camPitch += (this.targetCamPitch - this.camPitch) * ease;
-
-      this.cylinderWorld.root.rotation.z = -this.rollAngle;
-      this.cylinderCamera.position.set(0, -CYLINDER_RADIUS + this.camHeight, this.axialZ);
-      this.cylinderCamera.rotation.set(this.camPitch, this.camYaw, 0);
-      this.cylinderWorld.update(dt, this.simTime, this.focusedPlotId);
+    if (this.viewMode === 'space') {
+      this.spaceControls.update();
+      this.spaceWorld.update(dt, this.simTime);
 
       this.pipeline.render(
         this.renderer,
-        this.cylinderScene,
-        this.cylinderCamera,
+        this.spaceScene,
+        this.spaceCamera,
+        nightWarmth,
+        true,
+        '#070c18',
+        '#0c1428',
+        () => {},
+        true,
+      );
+
+      if (!this.readyFired) {
+        this.readyFired = true;
+        (window as unknown as { __renderReady?: boolean }).__renderReady = true;
+      }
+      return;
+    }
+
+    if (this.viewMode === 'interior') {
+      const easeIn = Math.min(1, dt * 8.5);
+      this.inPos.lerp(this.targetInPos, easeIn);
+      this.inYaw += (this.targetInYaw - this.inYaw) * easeIn;
+      this.inPitch += (this.targetInPitch - this.inPitch) * easeIn;
+      this.interiorCamera.position.copy(this.inPos);
+      this.interiorCamera.rotation.set(this.inPitch, this.inYaw, 0);
+
+      this.interiorWorld.update(this.simTime);
+
+      this.pipeline.render(
+        this.renderer,
+        this.interiorScene,
+        this.interiorCamera,
         nightWarmth,
         isDarkSky,
         this.skyTopHex,
@@ -2019,8 +2050,28 @@ export class DioramaEngine {
       return;
     }
 
-    // Smooth camera preset tweening
-    if (this.cameraTween) {
+    if (this.viewMode === 'ground') {
+      if (this.groundPreset === 'walk') {
+        this.walkTime += dt * 0.24;
+        this.targetFpPos.set(
+          Math.sin(this.walkTime) * 7.5,
+          2.2 + Math.sin(this.walkTime * 6) * 0.03,
+          Math.cos(this.walkTime) * 6.0 + 4.5,
+        );
+        this.targetFpYaw = this.walkTime * 0.65;
+        this.targetFpPitch = 0.17 + Math.sin(this.walkTime * 2) * 0.08;
+      }
+      const easeFp = Math.min(1, dt * 7.5);
+      this.fpPos.lerp(this.targetFpPos, easeFp);
+      this.fpYaw += (this.targetFpYaw - this.fpYaw) * easeFp;
+      this.fpPitch += (this.targetFpPitch - this.fpPitch) * easeFp;
+      this.groundCamera.position.copy(this.fpPos);
+      this.groundCamera.rotation.set(this.fpPitch, this.fpYaw, 0);
+      this.groundBackdrop.update(dt, this.simTime);
+    }
+
+    // Smooth camera preset tweening (plot view only)
+    if (this.viewMode === 'plot' && this.cameraTween) {
       const k = Math.min(1, dt * 6.5);
       const curAz = this.controls.getAzimuthalAngle();
       const curPol = this.controls.getPolarAngle();
@@ -2046,7 +2097,9 @@ export class DioramaEngine {
       }
     }
 
-    this.controls.update();
+    if (this.viewMode === 'plot') {
+      this.controls.update();
+    }
 
     // Update Eclipse Umbra sweep
     if (this.timeMode === 'eclipse') {
@@ -2135,14 +2188,15 @@ export class DioramaEngine {
     this.pipeline.render(
       this.renderer,
       this.scene,
-      this.camera,
+      this.viewMode === 'ground' ? this.groundCamera : this.camera,
       nightWarmth,
       isDarkSky,
       this.skyTopHex,
       this.skyBotHex,
       (hide) => {
         this.fxGroup.visible = !hide;
-        this.ghostGroup.visible = !hide && this.toolMode === 'place' && this.hoverValid;
+        this.ghostGroup.visible =
+          !hide && this.viewMode === 'plot' && this.toolMode === 'place' && this.hoverValid;
         for (const wm of this.waterMeshes) {
           wm.visible = !hide;
         }
@@ -2157,7 +2211,10 @@ export class DioramaEngine {
 
   dispose(): void {
     this.controls.dispose();
-    this.cylinderWorld.dispose();
+    this.spaceControls.dispose();
+    this.groundBackdrop.dispose();
+    this.spaceWorld.dispose();
+    this.interiorWorld.dispose();
     this.pipeline.dispose();
     this.renderer.dispose();
   }

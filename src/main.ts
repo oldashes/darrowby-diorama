@@ -1,14 +1,9 @@
 import './style.css';
 import { CATALOG, CatalogItem } from './assets/modelLibrary';
 import { playChimeSound, playUiTick } from './audio/sfx';
-import {
-  CONTINENT_STRIPS,
-  ContinentStripId,
-  CylinderCameraPreset,
-  CylinderPlotDef,
-  ViewMode,
-} from './world/cylinderWorld';
+import { GroundLookPreset, ViewMode } from './world/cylinderWorld';
 import { DioramaEngine } from './world/dioramaEngine';
+import { InteriorKind } from './world/interiorWorld';
 import { fetchOsmArea, geocodePlace } from './world/osmFetcher';
 import {
   CameraPresetId,
@@ -21,14 +16,13 @@ import {
   buildCustomBlueprint,
   fetchLiveWeather,
 } from './world/regions';
+import { SpaceSectorPin } from './world/spaceWorld';
 
 declare global {
   interface Window {
     setViewMode?: (m: ViewMode) => void;
-    setCylinderStrip?: (s: ContinentStripId) => void;
-    setCylinderCameraPreset?: (p: CylinderCameraPreset) => void;
-    focusCylinderPlot?: (id: string) => void;
-    enterCylinderPlot?: (id?: string) => Promise<void>;
+    setGroundLookPreset?: (p: GroundLookPreset) => void;
+    setInteriorKind?: (k: InteriorKind) => void;
     setRegion?: (id: Exclude<RegionId, 'custom'>) => void;
     setCustomCoords?: (lat: number, lon: number) => Promise<void>;
     loadOsmCoords?: (lat: number, lon: number, label?: string) => Promise<void>;
@@ -41,6 +35,7 @@ declare global {
     setCameraOrbit?: (az: number, pol: number, zoom?: number) => void;
     setCameraPreset?: (preset: CameraPresetId) => void;
     placeCatalogItem?: (id: string, x: number, z: number, rotY?: number) => unknown;
+    undoLastPlacement?: () => boolean;
     getDioramaStats?: () => ReturnType<DioramaEngine['getState']>;
     __renderReady?: boolean;
     __modelsLoaded?: boolean;
@@ -62,6 +57,12 @@ const WEATHER_LABELS: Record<WeatherId, string> = {
   snow: '飘雪',
 };
 
+const VALID_VIEWS: ViewMode[] = ['space', 'ground', 'interior', 'plot'];
+
+function isValidViewMode(val: string | undefined | null): val is ViewMode {
+  return Boolean(val && VALID_VIEWS.includes(val as ViewMode));
+}
+
 function bootstrap(): void {
   const maybeCanvas = document.getElementById('gl-canvas') as HTMLCanvasElement | null;
   if (!maybeCanvas) throw new Error('Missing #gl-canvas');
@@ -82,11 +83,17 @@ function bootstrap(): void {
   const regionModal = document.getElementById('region-modal');
   const catalogStrip = document.getElementById('catalog-strip');
 
-  const cylinderPinsEl = document.getElementById('cylinder-pins');
-  const cylinderBar = document.getElementById('cylinder-bar');
+  const spacePinsEl = document.getElementById('space-pins');
+  const spaceBar = document.getElementById('space-bar');
+  const groundBar = document.getElementById('ground-bar');
+  const interiorBar = document.getElementById('interior-bar');
   const camPresetsBar = document.getElementById('cam-presets');
-  const btnEnterPlot = document.getElementById('btn-enter-plot');
-  const btnBackCylinder = document.getElementById('btn-back-cylinder');
+
+  const btnDiveGround = document.getElementById('btn-dive-ground');
+  const btnEnterInterior = document.getElementById('btn-enter-interior');
+  const btnEnterPlotMode = document.getElementById('btn-enter-plot-mode');
+  const btnExitInterior = document.getElementById('btn-exit-interior');
+  const btnBackGround = document.getElementById('btn-back-ground');
   const btnToggleBuild = document.getElementById('btn-toggle-build');
   const btnToggleScene = document.getElementById('btn-toggle-scene');
   const btnOpenRegions = document.getElementById('btn-open-regions');
@@ -108,8 +115,9 @@ function bootstrap(): void {
   const coordStatus = document.getElementById('coord-status');
 
   const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'));
-  const stripBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.strip-btn'));
-  const cylCamBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.cyl-cam-btn'));
+  const spaceDestBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.space-dest-btn'));
+  const groundCamBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.ground-cam-btn'));
+  const interiorBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.interior-btn'));
   const styleBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.style-btn'));
   const timeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-time]'));
   const seasonBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-season]'));
@@ -121,6 +129,7 @@ function bootstrap(): void {
 
   let activeCat: CatalogItem['category'] = 'building';
   let isFetchingCustom = false;
+  let lastSpaceDest = 'sydney';
 
   function renderCatalogStrip(): void {
     if (!catalogStrip) return;
@@ -163,78 +172,106 @@ function bootstrap(): void {
 
   function syncHud(): void {
     const st = engine.getState();
-    const inCyl = st.viewMode === 'cylinder';
+    const view = st.viewMode;
     const isLightPaper =
-      st.renderStyle === 'pocket' && st.timeMode !== 'night' && st.timeMode !== 'eclipse';
+      st.renderStyle === 'pocket' &&
+      view !== 'space' &&
+      st.timeMode !== 'night' &&
+      st.timeMode !== 'eclipse';
     document.documentElement.classList.toggle('theme-pocket', isLightPaper);
 
-    cylinderBar?.classList.toggle('hidden', !inCyl);
-    camPresetsBar?.classList.toggle('hidden', inCyl);
-    btnEnterPlot?.classList.toggle('hidden', !inCyl);
-    btnBackCylinder?.classList.toggle('hidden', inCyl);
-    btnToggleBuild?.classList.toggle('hidden', inCyl);
-    cylinderPinsEl?.classList.toggle('hidden', !inCyl);
-    if (inCyl) {
+    // Per-mode sub-bars and dock controls
+    spaceBar?.classList.toggle('hidden', view !== 'space');
+    spacePinsEl?.classList.toggle('hidden', view !== 'space');
+    groundBar?.classList.toggle('hidden', view !== 'ground');
+    interiorBar?.classList.toggle('hidden', view !== 'interior');
+    camPresetsBar?.classList.toggle('hidden', view !== 'plot');
+
+    btnDiveGround?.classList.toggle('hidden', view !== 'space');
+    btnEnterInterior?.classList.toggle('hidden', view !== 'ground');
+    btnEnterPlotMode?.classList.toggle('hidden', view !== 'ground');
+    btnExitInterior?.classList.toggle('hidden', view !== 'interior');
+    btnBackGround?.classList.toggle('hidden', view !== 'plot');
+    btnToggleBuild?.classList.toggle('hidden', view !== 'plot');
+
+    if (view !== 'plot') {
       buildDrawer?.classList.add('hidden');
     }
 
-    const stripDef = CONTINENT_STRIPS[st.cylinderStrip];
-    const focused = st.focusedPlot;
-    const cylTimeLabel =
-      st.timeMode === 'night'
-        ? '星夜'
-        : st.timeMode === 'sunset'
-          ? '暮色'
-          : st.timeMode === 'eclipse'
-            ? '日食'
+    const activeSpecial = st.region.specialScenes.find(
+      (s) => s.id === st.activeSpecialSceneId,
+    );
+    const timeTag = activeSpecial
+      ? ` · ${activeSpecial.label}`
+      : st.timeMode === 'eclipse'
+        ? ' · 日食'
+        : st.timeMode === 'night'
+          ? ' · 夜'
+          : st.timeMode === 'sunset'
+            ? ' · 暮色'
             : st.timeMode === 'morning'
-              ? '晨曦'
-              : '白昼';
+              ? ' · 晨曦'
+              : '';
+    const seasonTag =
+      st.season === 'winter' && st.region.mildWinter && !st.isSnowyGround
+        ? '暖冬'
+        : SEASON_LABELS[st.season];
 
-    if (inCyl) {
-      if (locName) locName.textContent = '库珀空间站 · 奥尼尔圆筒';
+    if (view === 'space') {
+      if (locName) locName.textContent = '库珀空间站 · 岛三号奥尼尔圆筒';
       if (locSub) {
-        locSub.textContent = focused
-          ? `${stripDef.icon} ${stripDef.name} · 聚焦「${focused.name}」（${focused.climateTag}）`
-          : `${stripDef.icon} ${stripDef.name} · ${stripDef.subtitle}`;
+        locSub.textContent = 'L5 地月轨道 · 三面 42° 采光反射镜 · 零重力农业环与地月遥望';
       }
       if (fieldNote) {
-        fieldNote.textContent = focused
-          ? `${focused.subtitle}（滚轮前后漫游，点击地标或进入地块精建）`
-          : '3 条大陆风貌带 × 极地观星灯塔；滚轮沿气候轴漫游，拖拽抬头见对岸小镇。';
+        fieldNote.textContent =
+          '拖拽围绕圆筒外舱 360° 巡航，滚轮拉近可透过透明视窗瞥见旋转大陆，点击标签或下方目的地直接降落平地！';
       }
       if (legendRow) {
         legendRow.innerHTML = [
-          `<span class="legend-pill">🌏 3 大陆带</span>`,
-          `<span class="legend-pill">📍 ${st.cylinderPlotCount} 地块</span>`,
-          `<span class="legend-pill">🚋 3 环线电车</span>`,
-          `<span class="legend-pill">🪐 极地观测塔</span>`,
+          `<span class="legend-pill">🛰️ 外太空总览</span>`,
+          `<span class="legend-pill">🪞 3 采光反射镜</span>`,
+          `<span class="legend-pill">🌍 地月系统遥望</span>`,
         ].join('');
       }
-      if (weatherPill) {
-        weatherPill.textContent = `${stripDef.name} · ${cylTimeLabel}`;
+      if (weatherPill) weatherPill.textContent = `轨道俯瞰 · ${st.timeMode === 'night' ? '暗面微光' : '日照星海'}`;
+      if (placedCountPill) placedCountPill.textContent = `选定着陆区：${st.region.name}`;
+    } else if (view === 'interior') {
+      const isTavern = st.interiorKind === 'tavern';
+      if (locName) locName.textContent = isTavern ? '☕ 观海驿站酒馆 · 室内' : '🌿 玻璃温室花房 · 室内';
+      if (locSub) {
+        locSub.textContent = isTavern
+          ? `${st.region.name} 临海木石旅舍 · 墙挂库珀空间站蓝图 · 窗外即圆筒长街`
+          : `${st.region.name} 维多利亚铁艺花房 · 蓝花楹与盆栽群 · 玻璃穹顶透见旋转大陆`;
       }
-      if (placedCountPill) {
-        placedCountPill.textContent = `共 ${st.cylinderPlotCount} 处空间站地块`;
-      }
-      if (btnEnterPlot) {
-        btnEnterPlot.textContent = focused
-          ? `🛠️ 进入「${focused.shortLabel}」精建`
-          : '🛠️ 进入地块精建';
-      }
-    } else {
-      if (locName) locName.textContent = st.region.name;
-      if (locSub) locSub.textContent = st.region.badgeText;
-
       if (fieldNote) {
-        const activeSpecial = st.region.specialScenes.find(
-          (s) => s.id === st.activeSpecialSceneId,
-        );
-        fieldNote.textContent = activeSpecial
-          ? activeSpecial.note
-          : st.region.fieldNotes[st.season] || st.region.subtitle;
+        fieldNote.textContent =
+          '拖拽环顾室内细节，WASD/滚轮自由走动；点击正南侧木门或「出门回街道」即可返回平地街景。';
       }
-
+      if (legendRow) {
+        legendRow.innerHTML = isTavern
+          ? [
+              `<span class="legend-pill">🔥 砖砌壁炉</span>`,
+              `<span class="legend-pill">🐕 柴犬守店</span>`,
+              `<span class="legend-pill">🗺️ 空间站蓝图</span>`,
+            ].join('')
+          : [
+              `<span class="legend-pill">🌸 温室蓝花楹</span>`,
+              `<span class="legend-pill">🪴 多肉长桌</span>`,
+              `<span class="legend-pill">🪟 圆筒天窗</span>`,
+            ].join('');
+      }
+      if (weatherPill) weatherPill.textContent = `MMORPG 室内 · ${seasonTag}${timeTag}`;
+      if (placedCountPill) placedCountPill.textContent = isTavern ? '当前房间：观海驿站' : '当前房间：玻璃温室';
+    } else if (view === 'ground') {
+      if (locName) locName.textContent = `${st.region.name}（平地视角）`;
+      if (locSub) {
+        locSub.textContent = `${st.region.badgeText} · 脚下正常地球街区无缝衔接 R=320m 倒悬天空穹顶`;
+      }
+      if (fieldNote) {
+        fieldNote.textContent =
+          activeSpecial?.note ||
+          '拖拽自由环视眼前街区与头顶 120° 倒悬大陆天际线，WASD/滚轮漫步街头，也可推门进入室内或切至沙盘造景。';
+      }
       if (legendRow) {
         const parts = [
           `<span class="legend-pill">🏠 ${st.legendCounts.buildings}</span>`,
@@ -242,34 +279,57 @@ function bootstrap(): void {
           `<span class="legend-pill">🐑 ${st.legendCounts.living}</span>`,
         ];
         if (st.osmBuildingCount > 0 || st.osmRoadCount > 0) {
-          parts.push(`<span class="legend-pill">🗺️ OSM ${st.osmBuildingCount}栋/${st.osmRoadCount}路</span>`);
+          parts.push(
+            `<span class="legend-pill">🗺️ OSM ${st.osmBuildingCount}栋/${st.osmRoadCount}路</span>`,
+          );
         }
         legendRow.innerHTML = parts.join('');
       }
-
       if (weatherPill) {
-        const activeSpecial = st.region.specialScenes.find(
-          (s) => s.id === st.activeSpecialSceneId,
-        );
-        const timeTag = activeSpecial
-          ? ` · ${activeSpecial.label}`
-          : st.timeMode === 'eclipse'
-            ? ' · 日食'
-            : st.timeMode === 'night'
-              ? ' · 夜'
-              : '';
-        const seasonTag =
-          st.season === 'winter' && st.region.mildWinter && !st.isSnowyGround
-            ? '暖冬'
-            : SEASON_LABELS[st.season];
+        weatherPill.textContent = `${seasonTag} · ${WEATHER_LABELS[st.weather]}${timeTag}`;
+      }
+      if (placedCountPill) placedCountPill.textContent = `街区含 ${st.placedCount} 处建筑/物件`;
+    } else {
+      // 'plot' isometric sandbox builder
+      if (locName) locName.textContent = st.region.name;
+      if (locSub) locSub.textContent = st.region.badgeText;
+      if (fieldNote) {
+        fieldNote.textContent = activeSpecial
+          ? activeSpecial.note
+          : st.region.fieldNotes[st.season] || st.region.subtitle;
+      }
+      if (legendRow) {
+        const parts = [
+          `<span class="legend-pill">🏠 ${st.legendCounts.buildings}</span>`,
+          `<span class="legend-pill">🌳 ${st.legendCounts.nature}</span>`,
+          `<span class="legend-pill">🐑 ${st.legendCounts.living}</span>`,
+        ];
+        if (st.osmBuildingCount > 0 || st.osmRoadCount > 0) {
+          parts.push(
+            `<span class="legend-pill">🗺️ OSM ${st.osmBuildingCount}栋/${st.osmRoadCount}路</span>`,
+          );
+        }
+        legendRow.innerHTML = parts.join('');
+      }
+      if (weatherPill) {
         weatherPill.textContent = `${seasonTag} · ${WEATHER_LABELS[st.weather]}${timeTag}`;
       }
       if (placedCountPill) placedCountPill.textContent = `共 ${st.placedCount} 处可改建`;
     }
 
-    for (const b of modeBtns) b.classList.toggle('active', b.dataset.view === st.viewMode);
-    for (const b of stripBtns) b.classList.toggle('active', Number(b.dataset.strip) === st.cylinderStrip);
-    for (const b of cylCamBtns) b.classList.toggle('active', b.dataset.cylCam === st.cylinderPreset);
+    for (const b of modeBtns) b.classList.toggle('active', b.dataset.view === view);
+    for (const b of spaceDestBtns) {
+      const dest = b.dataset.dest;
+      const isActive =
+        dest === st.region.id || (st.region.id === 'custom' && dest === lastSpaceDest);
+      b.classList.toggle('active', isActive);
+    }
+    for (const b of groundCamBtns) {
+      b.classList.toggle('active', b.dataset.ground === st.groundPreset);
+    }
+    for (const b of interiorBtns) {
+      b.classList.toggle('active', b.dataset.room === st.interiorKind);
+    }
     for (const b of styleBtns) b.classList.toggle('active', b.dataset.style === st.renderStyle);
     for (const b of timeBtns) b.classList.toggle('active', b.dataset.time === st.timeMode);
     for (const b of seasonBtns) b.classList.toggle('active', b.dataset.season === st.season);
@@ -277,8 +337,8 @@ function bootstrap(): void {
     for (const b of catTabs) b.classList.toggle('active', b.dataset.cat === activeCat);
     for (const b of regionCards) b.classList.toggle('active', b.dataset.region === st.region.id);
 
-    canvas.classList.toggle('place-cursor', !inCyl && st.toolMode === 'place');
-    canvas.classList.toggle('delete-cursor', !inCyl && st.toolMode === 'delete');
+    canvas.classList.toggle('place-cursor', view === 'plot' && st.toolMode === 'place');
+    canvas.classList.toggle('delete-cursor', view === 'plot' && st.toolMode === 'delete');
 
     btnDeleteMode?.classList.toggle('danger-active', st.toolMode === 'delete');
     btnToggleBuild?.classList.toggle('active', !buildDrawer?.classList.contains('hidden'));
@@ -300,10 +360,8 @@ function bootstrap(): void {
     window.__modelsLoaded = st.modelsLoaded;
     window.__stats = {
       viewMode: st.viewMode,
-      cylinderStrip: st.cylinderStrip,
-      cylinderPreset: st.cylinderPreset,
-      focusedPlotId: st.focusedPlotId,
-      cylinderPlotCount: st.cylinderPlotCount,
+      groundPreset: st.groundPreset,
+      interiorKind: st.interiorKind,
       regionId: st.region.id,
       season: st.season,
       timeMode: st.timeMode,
@@ -332,7 +390,12 @@ function bootstrap(): void {
     },
   );
 
-  async function applyCustomLocation(lat: number, lon: number, label?: string): Promise<void> {
+  async function applyCustomLocation(
+    lat: number,
+    lon: number,
+    label?: string,
+    targetView?: ViewMode,
+  ): Promise<void> {
     if (isFetchingCustom) return;
     isFetchingCustom = true;
     if (btnApplyCoord) btnApplyCoord.textContent = '⏳ 正在拉取 OSM 街区与气象...';
@@ -348,8 +411,11 @@ function bootstrap(): void {
 
       const bp = buildCustomBlueprint(lat, lon, live, osm, label);
       engine.setRegion(bp);
-      engine.registerCustomPlotInCylinder(bp.name, lat, lon);
-      engine.setViewMode('plot');
+      const curView = engine.getState().viewMode;
+      const nextView: ViewMode = targetView ?? (curView === 'plot' ? 'plot' : 'ground');
+      if (curView !== nextView) {
+        engine.setViewMode(nextView);
+      }
       playChimeSound();
 
       if (coordStatus) {
@@ -366,35 +432,23 @@ function bootstrap(): void {
     }
   }
 
-  async function enterPlotFromCylinder(plot?: CylinderPlotDef): Promise<void> {
-    if (!plot) {
-      engine.setViewMode('plot');
-      return;
+  function switchView(view: ViewMode): void {
+    if (view !== 'plot') {
+      buildDrawer?.classList.add('hidden');
+      engine.setToolMode('view');
     }
-    engine.focusCylinderPlot(plot.id);
-    if (plot.presetRegionId) {
-      engine.setRegion(PRESET_REGIONS[plot.presetRegionId]);
-      engine.setViewMode('plot');
-      playChimeSound();
-      return;
-    }
-    if (plot.osmCoords) {
-      await applyCustomLocation(plot.osmCoords.lat, plot.osmCoords.lon, plot.osmCoords.label);
-      return;
-    }
-    engine.setViewMode('plot');
+    engine.setViewMode(view);
   }
 
   // URL overrides for deterministic testing or deep linking
   const params = new URLSearchParams(window.location.search);
-  const qView = params.get('view') as ViewMode | null;
+  const qView = params.get('view');
   const qRegion = params.get('region') as Exclude<RegionId, 'custom'> | null;
   if (qRegion && PRESET_REGIONS[qRegion]) {
     engine.setRegion(PRESET_REGIONS[qRegion]);
-    engine.focusCylinderPlot(qRegion);
-    if (qView !== 'cylinder') engine.setViewMode('plot');
+    lastSpaceDest = qRegion;
   }
-  if (qView === 'plot' || qView === 'cylinder') {
+  if (isValidViewMode(qView)) {
     engine.setViewMode(qView);
   }
   const qSeason = params.get('season') as SeasonId | null;
@@ -416,25 +470,13 @@ function bootstrap(): void {
 
   // Expose QA / Automation API
   window.getDioramaStats = () => engine.getState();
-  window.setViewMode = (m) => engine.setViewMode(m);
-  window.setCylinderStrip = (s) => engine.setCylinderStrip(s);
-  window.setCylinderCameraPreset = (p) => engine.setCylinderCameraPreset(p);
-  window.focusCylinderPlot = (id) => {
-    engine.focusCylinderPlot(id);
-  };
-  window.enterCylinderPlot = async (id) => {
-    const st = engine.getState();
-    const targetId = id || st.focusedPlotId;
-    const plot =
-      st.focusedPlot && st.focusedPlot.id === targetId
-        ? st.focusedPlot
-        : engine.focusCylinderPlot(targetId) ?? undefined;
-    await enterPlotFromCylinder(plot);
-  };
+  window.setViewMode = (m) => switchView(m);
+  window.setGroundLookPreset = (p) => engine.setGroundLookPreset(p);
+  window.setInteriorKind = (k) => engine.setInteriorKind(k);
   window.setRegion = (id) => {
     if (PRESET_REGIONS[id]) {
+      lastSpaceDest = id;
       engine.setRegion(PRESET_REGIONS[id]);
-      engine.focusCylinderPlot(id);
     }
   };
   window.setCustomCoords = async (lat, lon) => applyCustomLocation(lat, lon);
@@ -448,6 +490,7 @@ function bootstrap(): void {
   window.setCameraOrbit = (az, pol, zoom) => engine.setCameraOrbit(az, pol, zoom);
   window.setCameraPreset = (preset) => engine.setCameraPreset(preset);
   window.placeCatalogItem = (id, x, z, rotY) => engine.placeCatalogItem(id, x, z, rotY);
+  window.undoLastPlacement = () => engine.undoLastPlacement();
 
   // Wire UI Events
   for (const b of styleBtns) {
@@ -487,23 +530,39 @@ function bootstrap(): void {
   }
   for (const b of modeBtns) {
     b.addEventListener('click', () => {
+      const view = b.dataset.view;
+      if (!isValidViewMode(view)) return;
       playUiTick();
-      const view = b.dataset.view === 'plot' ? 'plot' : 'cylinder';
-      engine.setViewMode(view);
+      switchView(view);
     });
   }
-  for (const b of stripBtns) {
+  for (const b of spaceDestBtns) {
     b.addEventListener('click', () => {
-      playUiTick();
-      const s = Number(b.dataset.strip) as ContinentStripId;
-      engine.setCylinderStrip(s);
+      const dest = b.dataset.dest;
+      if (!dest) return;
+      playChimeSound();
+      lastSpaceDest = dest;
+      if (dest === 'guangzhou') {
+        void applyCustomLocation(23.1216, 113.265, '广州 · 北京路', 'ground');
+        return;
+      }
+      const rid = dest as Exclude<RegionId, 'custom'>;
+      if (PRESET_REGIONS[rid]) {
+        engine.setRegion(PRESET_REGIONS[rid]);
+        switchView('ground');
+      }
     });
   }
-  for (const b of cylCamBtns) {
+  for (const b of groundCamBtns) {
     b.addEventListener('click', () => {
       playUiTick();
-      const preset = (b.dataset.cylCam as CylinderCameraPreset) || 'vista';
-      engine.setCylinderCameraPreset(preset);
+      engine.setGroundLookPreset((b.dataset.ground as GroundLookPreset) || 'street');
+    });
+  }
+  for (const b of interiorBtns) {
+    b.addEventListener('click', () => {
+      playUiTick();
+      engine.setInteriorKind((b.dataset.room as InteriorKind) || 'tavern');
     });
   }
   for (const b of camBtns) {
@@ -518,9 +577,11 @@ function bootstrap(): void {
       const rid = card.dataset.region as Exclude<RegionId, 'custom'>;
       if (PRESET_REGIONS[rid]) {
         playChimeSound();
+        lastSpaceDest = rid;
         engine.setRegion(PRESET_REGIONS[rid]);
-        engine.focusCylinderPlot(rid);
-        engine.setViewMode('plot');
+        if (engine.getState().viewMode !== 'plot') {
+          switchView('ground');
+        }
         regionModal?.classList.add('hidden');
       }
     });
@@ -533,20 +594,30 @@ function bootstrap(): void {
       if (inputLat) inputLat.value = String(lat);
       if (inputLon) inputLon.value = String(lon);
       if (inputPlace) inputPlace.value = '';
+      lastSpaceDest = label.includes('广州') ? 'guangzhou' : lastSpaceDest;
       void applyCustomLocation(lat, lon, label);
     });
   }
 
-  btnEnterPlot?.addEventListener('click', () => {
-    const st = engine.getState();
-    void enterPlotFromCylinder(st.focusedPlot);
+  btnDiveGround?.addEventListener('click', () => {
+    playChimeSound();
+    switchView('ground');
   });
-
-  btnBackCylinder?.addEventListener('click', () => {
+  btnEnterInterior?.addEventListener('click', () => {
+    playChimeSound();
+    switchView('interior');
+  });
+  btnEnterPlotMode?.addEventListener('click', () => {
     playUiTick();
-    buildDrawer?.classList.add('hidden');
-    engine.setToolMode('view');
-    engine.setViewMode('cylinder');
+    switchView('plot');
+  });
+  btnExitInterior?.addEventListener('click', () => {
+    playUiTick();
+    switchView('ground');
+  });
+  btnBackGround?.addEventListener('click', () => {
+    playUiTick();
+    switchView('ground');
   });
 
   btnToggleBuild?.addEventListener('click', () => {
@@ -665,7 +736,7 @@ function bootstrap(): void {
     }
   });
 
-  // Canvas tap vs drag-to-orbit / drag-to-look disambiguation (6px threshold)
+  // Canvas tap vs drag-to-look / drag-to-orbit disambiguation (6px threshold)
   let downPt = { x: 0, y: 0 };
   let lastPt = { x: 0, y: 0 };
   let isDown = false;
@@ -676,16 +747,18 @@ function bootstrap(): void {
   });
   canvas.addEventListener('pointermove', (e) => {
     const mode = engine.getState().viewMode;
-    if (mode === 'cylinder') {
+    if (mode === 'ground' || mode === 'interior') {
       if (isDown) {
         const dx = e.clientX - lastPt.x;
         const dy = e.clientY - lastPt.y;
         lastPt = { x: e.clientX, y: e.clientY };
-        engine.handleCylinderDrag(dx, dy);
+        engine.handleFirstPersonDrag(dx, dy);
       }
       return;
     }
-    engine.updateHover(e.clientX, e.clientY);
+    if (mode === 'plot') {
+      engine.updateHover(e.clientX, e.clientY);
+    }
   });
   canvas.addEventListener('pointerup', (e) => {
     if (!isDown) return;
@@ -693,17 +766,12 @@ function bootstrap(): void {
     const dist = Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y);
     if (dist <= 6) {
       const st = engine.getState();
-      if (st.viewMode === 'cylinder') {
-        const hit = engine.handleCylinderTap(e.clientX, e.clientY);
-        if (hit) {
-          if (st.focusedPlotId === hit.id) {
-            void enterPlotFromCylinder(hit);
-          } else {
-            playUiTick();
-            engine.focusCylinderPlot(hit.id);
-          }
+      if (st.viewMode === 'interior') {
+        if (engine.handleInteriorTap(e.clientX, e.clientY)) {
+          playUiTick();
+          switchView('ground');
         }
-      } else {
+      } else if (st.viewMode === 'plot') {
         engine.handleTap(e.clientX, e.clientY);
       }
     }
@@ -714,9 +782,10 @@ function bootstrap(): void {
   canvas.addEventListener(
     'wheel',
     (e) => {
-      if (engine.getState().viewMode === 'cylinder') {
+      const mode = engine.getState().viewMode;
+      if (mode === 'ground' || mode === 'interior') {
         e.preventDefault();
-        engine.handleCylinderWheel(e.deltaY);
+        engine.handleFirstPersonWheel(e.deltaY);
       }
     },
     { passive: false },
@@ -725,11 +794,13 @@ function bootstrap(): void {
   window.addEventListener('keydown', (e) => {
     if (document.activeElement?.tagName === 'INPUT') return;
     const k = e.key.toLowerCase();
-    if (engine.getState().viewMode === 'cylinder') {
-      if (k === 'w' || k === 'arrowup') engine.nudgeCylinder(-4.5, 0);
-      else if (k === 's' || k === 'arrowdown') engine.nudgeCylinder(4.5, 0);
-      else if (k === 'a' || k === 'arrowleft') engine.nudgeCylinder(0, 0.14);
-      else if (k === 'd' || k === 'arrowright') engine.nudgeCylinder(0, -0.14);
+    const mode = engine.getState().viewMode;
+
+    if (mode === 'ground' || mode === 'interior') {
+      if (k === 'w' || k === 'arrowup') engine.moveFirstPerson(0.75, 0);
+      else if (k === 's' || k === 'arrowdown') engine.moveFirstPerson(-0.75, 0);
+      else if (k === 'a' || k === 'arrowleft') engine.moveFirstPerson(0, -0.65);
+      else if (k === 'd' || k === 'arrowright') engine.moveFirstPerson(0, 0.65);
       else if (k === 'escape') {
         scenePopover?.classList.add('hidden');
         regionModal?.classList.add('hidden');
@@ -737,7 +808,7 @@ function bootstrap(): void {
       return;
     }
 
-    if (k === 'r') {
+    if (k === 'r' && mode === 'plot') {
       engine.rotatePreview90();
     } else if (k === 'escape') {
       buildDrawer?.classList.add('hidden');
@@ -751,63 +822,55 @@ function bootstrap(): void {
     engine.resize(window.innerWidth, window.innerHeight);
   });
 
-  // Pooled floating HTML pins for Cooper Station plots (never recreated per frame!)
+  // Pooled floating HTML dive-in pins for Space View (never recreated per frame)
   const pinPool = new Map<string, HTMLButtonElement>();
-  const pinDataMap = new Map<string, CylinderPlotDef>();
+  const pinDataMap = new Map<string, SpaceSectorPin>();
 
-  function syncFloatingPins(): void {
-    if (!cylinderPinsEl) return;
-    if (engine.getState().viewMode !== 'cylinder') {
+  function syncSpacePins(): void {
+    if (!spacePinsEl) return;
+    if (engine.getState().viewMode !== 'space') {
       for (const btn of pinPool.values()) btn.classList.add('hidden');
       return;
     }
 
-    let pins = engine.getProjectedCylinderPins();
-    if (window.innerWidth <= 780 && pins.length > 5) {
-      pins = [...pins]
-        .sort((a, b) => (a.isFocused ? -1 : b.isFocused ? 1 : a.dist - b.dist))
-        .slice(0, 5);
-    }
-
+    const pins = engine.getProjectedSpacePins();
     const activeIds = new Set<string>();
     for (const pin of pins) {
-      activeIds.add(pin.plot.id);
-      pinDataMap.set(pin.plot.id, pin.plot);
+      if (!pin.visible) continue;
+      activeIds.add(pin.id);
+      pinDataMap.set(pin.id, pin);
 
-      let btn = pinPool.get(pin.plot.id);
+      let btn = pinPool.get(pin.id);
       if (!btn) {
         btn = document.createElement('button');
         btn.className = 'cyl-pin';
-        btn.dataset.plotId = pin.plot.id;
-        btn.innerHTML = `<span>${pin.plot.icon}</span><span class="pin-name">${pin.plot.shortLabel}</span><span class="cyl-pin-tag">${pin.plot.climateTag}</span>`;
+        btn.dataset.pinId = pin.id;
+        btn.innerHTML = `<span class="pin-name">${pin.label}</span><span class="cyl-pin-tag">${pin.subLabel}</span>`;
         btn.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          const pid = (ev.currentTarget as HTMLButtonElement).dataset.plotId;
+          const pid = (ev.currentTarget as HTMLButtonElement).dataset.pinId;
           const pDef = pid ? pinDataMap.get(pid) : undefined;
           if (!pDef) return;
-          if (engine.getState().focusedPlotId === pDef.id) {
-            void enterPlotFromCylinder(pDef);
-          } else {
-            playUiTick();
-            engine.focusCylinderPlot(pDef.id);
-          }
+          playChimeSound();
+          lastSpaceDest = pDef.regionId;
+          engine.setRegion(PRESET_REGIONS[pDef.regionId]);
+          switchView('ground');
         });
-        cylinderPinsEl.appendChild(btn);
-        pinPool.set(pin.plot.id, btn);
+        spacePinsEl.appendChild(btn);
+        pinPool.set(pin.id, btn);
       } else {
         const nameSpan = btn.querySelector('.pin-name');
         const tagSpan = btn.querySelector('.cyl-pin-tag');
-        if (nameSpan && nameSpan.textContent !== pin.plot.shortLabel) {
-          nameSpan.textContent = pin.plot.shortLabel;
+        if (nameSpan && nameSpan.textContent !== pin.label) {
+          nameSpan.textContent = pin.label;
         }
-        if (tagSpan && tagSpan.textContent !== pin.plot.climateTag) {
-          tagSpan.textContent = pin.plot.climateTag;
+        if (tagSpan && tagSpan.textContent !== pin.subLabel) {
+          tagSpan.textContent = pin.subLabel;
         }
       }
 
       btn.classList.remove('hidden');
-      btn.classList.toggle('focused', pin.isFocused);
-      btn.classList.toggle('overhead', pin.isOverhead && !pin.isFocused);
+      btn.classList.toggle('focused', engine.getState().region.id === pin.regionId);
       btn.style.transform = `translate3d(${Math.round(pin.x)}px, ${Math.round(pin.y)}px, 0) translate(-50%, -100%)`;
     }
 
@@ -825,7 +888,7 @@ function bootstrap(): void {
     const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
     last = now;
     engine.step(dt);
-    syncFloatingPins();
+    syncSpacePins();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

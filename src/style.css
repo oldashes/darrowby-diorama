@@ -116,9 +116,10 @@ html.clean-mode .modal-backdrop {
 }
 
 :root:not(.theme-pocket) .cyl-pin.focused {
-  background-color: rgba(232, 168, 76, 0.28);
-  border-color: #e8a84c;
-  color: #fff6e6;
+  background-color: rgba(14, 21, 36, 0.94);
+  border-color: #f5b855;
+  color: #fff6e0;
+  box-shadow: 0 0 0 2px rgba(245, 184, 85, 0.28), 0 6px 16px rgba(0, 0, 0, 0.45);
 }
 
 .cyl-pin:hover {
@@ -309,6 +310,7 @@ html.clean-mode .modal-backdrop {
   gap: 3px;
   padding: 4px;
   border-radius: 11px;
+  isolation: isolate;
 }
 
 .pill-group button,
@@ -348,6 +350,11 @@ button.active {
   color: var(--accent-text) !important;
   background: var(--accent-bg) !important;
   border-color: var(--accent) !important;
+}
+
+.mode-btn {
+  transition: none !important;
+  transform: translateZ(0);
 }
 
 .hud-bottom {
@@ -532,7 +539,10 @@ button.active {
 }
 
 .strip-btn,
-.cyl-cam-btn {
+.cyl-cam-btn,
+.ground-cam-btn,
+.interior-btn,
+.space-dest-btn {
   padding: 4px 8px !important;
   font-size: 11px !important;
   border-radius: 999px !important;
@@ -731,7 +741,13 @@ button.active {
 
   .top-controls {
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
+    gap: 5px;
+  }
+
+  .top-controls .pill-group {
+    flex-wrap: wrap;
+    max-width: 100%;
   }
 
   .pill-group button {
@@ -751,13 +767,23 @@ button.active {
 
   .cam-btn,
   .strip-btn,
-  .cyl-cam-btn {
+  .cyl-cam-btn,
+  .ground-cam-btn,
+  .interior-btn,
+  .space-dest-btn {
     padding: 3px 6px !important;
     font-size: 10px !important;
   }
 
   .cylinder-bar {
     gap: 4px;
+  }
+
+  .dock-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 100%;
+    border-radius: 18px;
   }
 
   .dock-btn {

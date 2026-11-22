@@ -3,16 +3,16 @@ import {
   WorldShaderUniforms,
   attachStorybookSurfaceShader,
 } from '../assets/modelLibrary';
-import { RegionId, RenderStyleId, TimeMode } from './regions';
+import { RegionBlueprint, RegionId, SeasonId, TimeMode } from './regions';
 
-export type ViewMode = 'cylinder' | 'plot';
-export type CylinderCameraPreset = 'vista' | 'tram' | 'axis';
+export type ViewMode = 'space' | 'ground' | 'interior' | 'plot';
+export type GroundLookPreset = 'street' | 'sky' | 'walk';
 export type ContinentStripId = 0 | 1 | 2;
 
-export const CYLINDER_RADIUS = 56;
-export const CYLINDER_LENGTH = 180;
-const HALF_LEN = CYLINDER_LENGTH * 0.5;
-const STRIP_ARC_HALF = (41 * Math.PI) / 180; // 82° lush valley continent strip + 38° skylight bay
+export const CYLINDER_RADIUS = 320;
+export const CYLINDER_LENGTH = 1100;
+const CYLINDER_CENTER_Z = -210; // spans z in [-760, +340]
+const STRIP_ARC_HALF = (40 * Math.PI) / 180; // 80° continent strips alternating with 40° sky bays
 
 export interface ContinentStripDef {
   id: ContinentStripId;
@@ -60,18 +60,7 @@ export interface CylinderPlotDef {
   isCustomUserPlot?: boolean;
 }
 
-export interface ProjectedPlotPin {
-  plot: CylinderPlotDef;
-  x: number;
-  y: number;
-  visible: boolean;
-  isOverhead: boolean;
-  isFocused: boolean;
-  dist: number;
-}
-
 export const INITIAL_CYLINDER_PLOTS: CylinderPlotDef[] = [
-  // Strip 0: East Asia & Water Towns
   {
     id: 'otaru',
     name: '北海道 · 小樽运河',
@@ -105,8 +94,6 @@ export const INITIAL_CYLINDER_PLOTS: CylinderPlotDef[] = [
     subtitle: '岭南常青骑楼街巷与 OpenStreetMap 实景风貌',
     osmCoords: { lat: 23.1216, lon: 113.265, label: '广州 · 北京路' },
   },
-
-  // Strip 1: Europe & Pastoral Canals
   {
     id: 'darrowby',
     name: '约克郡 · 达罗比',
@@ -140,8 +127,6 @@ export const INITIAL_CYLINDER_PLOTS: CylinderPlotDef[] = [
     subtitle: '悬崖层叠白墙与钴蓝穹顶的爱琴海阳光海岸',
     osmCoords: { lat: 36.4618, lon: 25.3753, label: '圣托里尼 · 伊亚' },
   },
-
-  // Strip 2: Oceania & Americas Coastline
   {
     id: 'quebec',
     name: '魁北克 · 老城',
@@ -196,7 +181,6 @@ export function routeCoordsToCylinder(
   const climateLabel =
     lat > 40 ? '高纬寒雪气候段' : lat >= 26 ? '温带四季气候段' : lat < 0 ? '南半球反季暖夏段' : '低纬亚热带暖冬段';
 
-  // Offset slightly along the axial avenue if near a fixed preset plot so pins stay distinct
   const near = existingPlots.find(
     (p) => !p.isCustomUserPlot && p.strip === strip && Math.abs(p.axialZ - axialZ) < 12,
   );
@@ -213,14 +197,23 @@ export function routeCoordsToCylinder(
   };
 }
 
-function buildCurvedStripGeometry(
-  thetaCenter: number,
-  arcHalf: number,
-  length: number,
-  radius: number,
-  segAng: number,
-  segZ: number,
-): THREE.BufferGeometry {
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Ground height of the seamless flat central plain curving smoothly into the R=320 O'Neill cylinder barrel. */
+function groundBowlY(x: number, z: number): number {
+  const sinT = Math.min(0.999, Math.abs(x) / CYLINDER_RADIUS);
+  const cylY = CYLINDER_RADIUS * (1 - Math.sqrt(1 - sinT * sinT));
+  const r = Math.hypot(x, z);
+  const blend = smoothstep(52, 130, r);
+  return -0.045 + (cylY + 0.045) * blend;
+}
+
+function buildBottomValleyStripGeometry(arcHalf: number, length: number, radius: number): THREE.BufferGeometry {
+  const segAng = 32;
+  const segZ = 44;
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
@@ -228,14 +221,19 @@ function buildCurvedStripGeometry(
 
   for (let iz = 0; iz <= segZ; iz++) {
     const v = iz / segZ;
-    const z = -length * 0.5 + v * length;
+    const z = CYLINDER_CENTER_Z - length * 0.5 + v * length;
     for (let ia = 0; ia <= segAng; ia++) {
       const u = ia / segAng;
-      const theta = thetaCenter - arcHalf + u * arcHalf * 2;
+      const theta = -arcHalf + u * arcHalf * 2;
+      const x = radius * Math.sin(theta);
+      const y = groundBowlY(x, z);
+      positions.push(x, y, z);
+
       const s = Math.sin(theta);
       const c = Math.cos(theta);
-      positions.push(radius * s, -radius * c, z);
-      normals.push(-s, c, 0);
+      const r = Math.hypot(x, z);
+      const b = smoothstep(52, 130, r);
+      normals.push(-s * b, c * b + (1 - b), 0);
       uvs.push(u, 1 - v);
     }
   }
@@ -247,7 +245,7 @@ function buildCurvedStripGeometry(
       const b = a + 1;
       const d = (iz + 1) * stride + ia;
       const e = d + 1;
-      // Right-handed inward facing ((d - a) x (b - a) points straight inward toward center axis)
+      // Right-handed inward facing (+Y upward)
       indices.push(a, d, b, b, d, e);
     }
   }
@@ -260,146 +258,128 @@ function buildCurvedStripGeometry(
   return geo;
 }
 
-function buildContinentTexture(stripId: ContinentStripId): THREE.CanvasTexture {
-  const w = 512;
+function buildOverheadContinentGeometry(
+  thetaCenter: number,
+  arcHalf: number,
+  length: number,
+  radius: number,
+): THREE.BufferGeometry {
+  const segAng = 24;
+  const segZ = 32;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let iz = 0; iz <= segZ; iz++) {
+    const v = iz / segZ;
+    const z = CYLINDER_CENTER_Z - length * 0.5 + v * length;
+    for (let ia = 0; ia <= segAng; ia++) {
+      const u = ia / segAng;
+      const theta = thetaCenter - arcHalf + u * arcHalf * 2;
+      const s = Math.sin(theta);
+      const c = Math.cos(theta);
+      positions.push(radius * s, radius * (1 - c), z);
+      normals.push(-s, c, 0);
+      uvs.push(u, 1 - v);
+    }
+  }
+
+  const stride = segAng + 1;
+  for (let iz = 0; iz < segZ; iz++) {
+    for (let ia = 0; ia < segAng; ia++) {
+      const a = iz * stride + ia;
+      const b = a + 1;
+      const d = (iz + 1) * stride + ia;
+      const e = d + 1;
+      indices.push(a, d, b, b, d, e);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function buildFloorLandscapeTexture(region: RegionBlueprint, season: SeasonId, snowy: boolean): THREE.CanvasTexture {
+  const w = 1024;
   const h = 1024;
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
   const ctx = c.getContext('2d')!;
 
-  // Smooth axial climate gradient from z = -90 (v=1, y=h in Canvas? Careful: in buildCurvedStripGeometry v=0 is z=-90 -> uv.y = 1 (top of texture))
-  // Wait: Canvas y=0 corresponds to UV y=1 (Three.js flipY = true default!), which is z = -90 (North Polar snow).
-  // Canvas y=h corresponds to UV y=0, which is z = +90 (South Sunlit Sea/Bay).
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  if (stripId === 0) {
-    grad.addColorStop(0.0, '#e6e1d4'); // North polar snow
-    grad.addColorStop(0.24, '#c8d4ba');
-    grad.addColorStop(0.45, '#9ec16f'); // Wangshi middle plain
-    grad.addColorStop(0.68, '#8ab462');
-    grad.addColorStop(1.0, '#78a556'); // Guangzhou lush subtropical evergreen
-  } else if (stripId === 1) {
-    grad.addColorStop(0.0, '#e8e4d8'); // Darrowby Yorkshire frost
-    grad.addColorStop(0.26, '#c2cfa6');
-    grad.addColorStop(0.50, '#9ac06d'); // Amsterdam pastures
-    grad.addColorStop(0.76, '#b5ac6c'); // Mediterranean sunlit hillside
-    grad.addColorStop(1.0, '#9cb870');
-  } else {
-    grad.addColorStop(0.0, '#e4dfd2'); // Quebec winter-autumn border
-    grad.addColorStop(0.26, '#c2a66f'); // Autumn gold woods
-    grad.addColorStop(0.50, '#99be6e'); // San Francisco green hills
-    grad.addColorStop(0.75, '#86b55e'); // Sydney summer lawn
-    grad.addColorStop(1.0, '#7eb05b'); // Coastal headland grass
-  }
-  ctx.fillStyle = grad;
+  const turfHex = snowy
+    ? region.palette.grassWinter
+    : season === 'spring'
+      ? region.palette.grassSpring
+      : season === 'autumn'
+        ? region.palette.grassAutumn
+        : season === 'winter'
+          ? '#92b070'
+          : region.palette.grassSummer;
+
+  ctx.fillStyle = turfHex;
   ctx.fillRect(0, 0, w, h);
 
-  // Subtle deterministic watercolor turf/snow dots
-  let seed = 701 + stripId * 193;
+  let seed = 919;
   const rnd = () => {
     seed = (seed * 16807) % 2147483647;
     return (seed - 1) / 2147483646;
   };
-  for (let i = 0; i < 1600; i++) {
-    const px = rnd() * w;
-    const py = rnd() * h;
-    const r = 1.2 + rnd() * 2.8;
-    ctx.fillStyle =
-      py < h * 0.25
-        ? 'rgba(255,253,248,0.45)'
-        : i % 2 === 0
-          ? 'rgba(110,145,70,0.22)'
-          : 'rgba(236,225,165,0.28)';
-    ctx.beginPath();
-    ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fill();
+
+  // Agricultural & meadow patchworks across the sweeping valley slopes
+  for (let row = 0; row < 20; row++) {
+    for (let col = 0; col < 18; col++) {
+      if (Math.abs(col - 9) <= 2 && Math.abs(row - 13) <= 2) continue;
+      if (rnd() > 0.62) continue;
+      const px = col * 56 + 4;
+      const py = row * 50 + 4;
+      ctx.fillStyle = snowy
+        ? 'rgba(232, 232, 224, 0.45)'
+        : col % 3 === 0 && rnd() > 0.45
+          ? 'rgba(202, 186, 108, 0.42)'
+          : rnd() > 0.5
+            ? 'rgba(154, 188, 86, 0.40)'
+            : 'rgba(118, 158, 78, 0.36)';
+      ctx.fillRect(px, py, 48, 42);
+      ctx.strokeStyle = 'rgba(110, 104, 82, 0.28)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(px, py, 48, 42);
+    }
   }
 
-  // Farmland / vineyard patchwork in mid-strip
+  // Grand curving river / bay running down the right-center valley toward the far endcap
   ctx.save();
-  for (let row = 0; row < 10; row++) {
-    const fy = h * 0.30 + row * 48;
-    const fx = row % 2 === 0 ? w * 0.58 : w * 0.14;
-    ctx.fillStyle =
-      stripId === 0
-        ? row % 2 === 0
-          ? 'rgba(182, 206, 98, 0.45)'
-          : 'rgba(210, 192, 108, 0.38)'
-        : 'rgba(170, 196, 106, 0.35)';
-    ctx.fillRect(fx, fy, w * 0.22, 34);
-    ctx.strokeStyle = 'rgba(128, 118, 92, 0.35)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(fx, fy, w * 0.22, 34);
-  }
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = snowy ? '#c4d8e0' : region.palette.waterTop;
+  ctx.lineWidth = 44;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.58, 0);
+  ctx.bezierCurveTo(w * 0.68, h * 0.3, w * 0.48, h * 0.68, w * 0.54, h);
+  ctx.stroke();
   ctx.restore();
 
-  // Coastal bay cove near south end on Strip 2 (Sydney) and Strip 1 (Santorini)
-  if (stripId === 2) {
-    ctx.fillStyle = '#e5cf9d';
+  if (region.waterLayout === 'harbour_bay' && !snowy) {
+    ctx.fillStyle = '#dec996';
     ctx.beginPath();
-    ctx.ellipse(w * 0.62, h * 0.78, w * 0.32, h * 0.12, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(w * 0.54, h * 0.72, 130, 72, 0.1, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#4bbbd0';
     ctx.beginPath();
-    ctx.ellipse(w * 0.66, h * 0.80, w * 0.27, h * 0.095, -0.2, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (stripId === 1) {
-    ctx.fillStyle = '#4f99b8';
-    ctx.beginPath();
-    ctx.ellipse(w * 0.56, h * 0.80, w * 0.26, h * 0.09, 0.1, 0, Math.PI * 2);
+    ctx.ellipse(w * 0.55, h * 0.72, 114, 58, 0.1, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Winding Grand Axial Canal running from polar snow meltwater down the length of the strip
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = '#758a7e';
-  ctx.lineWidth = 26;
-  ctx.beginPath();
-  for (let i = 0; i <= 40; i++) {
-    const t = i / 40;
-    const x = w * 0.54 + Math.sin(t * Math.PI * 3.5 + stripId) * 28;
-    const y = t * h;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  const waterGrad = ctx.createLinearGradient(0, 0, 0, h);
-  waterGrad.addColorStop(0.0, '#c6deea'); // frozen ice upper canal
-  waterGrad.addColorStop(0.28, '#95cad8');
-  waterGrad.addColorStop(0.75, '#6cb8cb');
-  waterGrad.addColorStop(1.0, '#4bbbd0');
-  ctx.strokeStyle = waterGrad;
-  ctx.lineWidth = 18;
-  ctx.stroke();
-  ctx.restore();
-
-  // Axial Transit Tram Track & Ring Boulevard (at u ≈ 0.36)
-  const trackX = w * 0.36;
-  ctx.fillStyle = '#9b8d74';
-  ctx.fillRect(trackX - 11, 0, 22, h);
-  ctx.fillStyle = '#d7cab0';
-  ctx.fillRect(trackX - 8, 0, 16, h);
-  ctx.fillStyle = '#5c5244';
-  for (let ty = 6; ty < h; ty += 14) {
-    ctx.fillRect(trackX - 6, ty, 12, 3);
-  }
-
-  // Cross avenues & parcel outlines around z = -45 (y=0.25h), 0 (y=0.5h), +45 (y=0.75h)
-  for (const frac of [0.25, 0.5, 0.75]) {
-    const py = h * frac;
-    ctx.fillStyle = '#d8ccb2';
-    ctx.fillRect(w * 0.12, py - 7, w * 0.76, 14);
-    ctx.strokeStyle = 'rgba(72, 68, 56, 0.42)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(w * 0.5 - 52, py - 46, 104, 92);
-  }
-
-  // Steel strip curb edging
-  ctx.fillStyle = '#606872';
-  ctx.fillRect(0, 0, 10, h);
-  ctx.fillRect(w - 10, 0, 10, h);
+  // Extending sandstone avenue straight along center-left axis
+  ctx.fillStyle = snowy ? '#d8d4c8' : region.palette.dirtPath;
+  ctx.fillRect(w * 0.41, 0, 22, h);
+  ctx.fillStyle = 'rgba(120, 108, 86, 0.35)';
+  ctx.fillRect(w * 0.41, 0, 2, h);
+  ctx.fillRect(w * 0.41 + 20, 0, 2, h);
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -408,7 +388,93 @@ function buildContinentTexture(stripId: ContinentStripId): THREE.CanvasTexture {
   return tex;
 }
 
-function buildSkyBackingTexture(isNight: boolean): THREE.CanvasTexture {
+function buildOverheadCityTexture(stripIdx: number, isNight: boolean): THREE.CanvasTexture {
+  const w = 1024;
+  const h = 2048;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  if (isNight) {
+    grad.addColorStop(0, '#141c2c');
+    grad.addColorStop(0.5, '#121b29');
+    grad.addColorStop(1, '#101925');
+  } else if (stripIdx === 1) {
+    grad.addColorStop(0, '#cfd8c2');
+    grad.addColorStop(0.35, '#8bb364');
+    grad.addColorStop(1, '#78a354');
+  } else {
+    grad.addColorStop(0, '#d2d4c4');
+    grad.addColorStop(0.3, '#94b86a');
+    grad.addColorStop(0.7, '#7eab5a');
+    grad.addColorStop(1, '#6d9b4e');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Lush continuous central linear park belt down the middle (Spinward style!)
+  ctx.fillStyle = isNight ? '#162d26' : '#5f9646';
+  ctx.fillRect(w * 0.42, 0, w * 0.16, h);
+
+  // Curving canal & lakes inside central park
+  ctx.strokeStyle = isNight ? '#2c6486' : '#43a8c4';
+  ctx.lineWidth = 26;
+  ctx.beginPath();
+  for (let i = 0; i <= 32; i++) {
+    const t = i / 32;
+    const x = w * 0.5 + Math.sin(t * Math.PI * 4 + stripIdx) * 38;
+    const y = t * h;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Dense urban blocks flanking both sides of the central park!
+  let seed = 4111 + stripIdx * 313;
+  const rnd = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  const roofPal = isNight
+    ? ['#222b3d', '#2b354a', '#1b2333']
+    : ['#c96b54', '#efe6d2', '#4e6d85', '#d9ab58', '#849c64', '#b45a4a'];
+
+  for (let row = 0; row < 54; row++) {
+    const by = row * 38 + 4;
+    ctx.fillStyle = isNight ? '#243045' : '#dfd8c3';
+    ctx.fillRect(16, by - 4, w - 32, 4);
+
+    for (let col = 0; col < 18; col++) {
+      if (col >= 7 && col <= 10) continue;
+      if (rnd() > 0.88) continue;
+      const bx = 24 + col * 54;
+      const bw = 40 + rnd() * 10;
+      const bh = 27 + rnd() * 7;
+      ctx.fillStyle = roofPal[(row * 7 + col) % roofPal.length];
+      ctx.fillRect(bx, by + 2, bw, bh);
+
+      if (isNight) {
+        ctx.fillStyle = rnd() > 0.28 ? '#ffd978' : '#7ae2ff';
+        for (let wy = 4; wy < bh - 3; wy += 4) {
+          for (let wx = 4; wx < bw - 3; wx += 6) {
+            if (rnd() > 0.35) ctx.fillRect(bx + wx, by + 2 + wy, 3, 2);
+          }
+        }
+      }
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildSkyVaultTexture(isNight: boolean): THREE.CanvasTexture {
   const w = 512;
   const h = 512;
   const c = document.createElement('canvas');
@@ -418,47 +484,32 @@ function buildSkyBackingTexture(isNight: boolean): THREE.CanvasTexture {
 
   if (!isNight) {
     const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0.0, '#cfe0ea');
-    g.addColorStop(0.5, '#e8eef0');
-    g.addColorStop(1.0, '#f3ebd8');
+    g.addColorStop(0.0, '#7ebce0');
+    g.addColorStop(0.45, '#b6dcef');
+    g.addColorStop(1.0, '#e6eff0');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
-    // Subtle sunlit architectural drafting lines
-    ctx.strokeStyle = 'rgba(130, 160, 185, 0.22)';
-    ctx.lineWidth = 2;
-    for (let x = 32; x < w; x += 64) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    for (let i = 0; i < 10; i++) {
+      const cx = (i * 97 + 40) % w;
+      const cy = (i * 53 + 35) % h;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
+      ctx.ellipse(cx, cy, 46 + (i % 3) * 18, 13 + (i % 2) * 5, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
   } else {
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0.0, '#0d1426');
-    g.addColorStop(0.5, '#17233f');
-    g.addColorStop(1.0, '#0d1529');
-    ctx.fillStyle = g;
+    ctx.fillStyle = '#0e172c';
     ctx.fillRect(0, 0, w, h);
-
-    // Soft Milky Way glow & crisp twinkling star points
-    ctx.fillStyle = 'rgba(110, 148, 224, 0.14)';
-    ctx.beginPath();
-    ctx.ellipse(w * 0.5, h * 0.5, w * 0.45, h * 0.14, 0.35, 0, Math.PI * 2);
-    ctx.fill();
-
-    let s = 919;
+    let s = 1777;
     const rnd = () => {
       s = (s * 16807) % 2147483647;
       return (s - 1) / 2147483646;
     };
-    for (let i = 0; i < 240; i++) {
-      const sx = rnd() * w;
-      const sy = rnd() * h;
-      const sr = rnd() > 0.88 ? 2.2 : 1.1;
-      ctx.fillStyle = rnd() > 0.7 ? '#ffe8b5' : '#e6efff';
+    for (let i = 0; i < 360; i++) {
+      ctx.fillStyle = rnd() > 0.75 ? '#ffe7b3' : '#e4eeff';
       ctx.beginPath();
-      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.arc(rnd() * w, rnd() * h, rnd() > 0.9 ? 1.8 : 0.9, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -467,841 +518,466 @@ function buildSkyBackingTexture(isNight: boolean): THREE.CanvasTexture {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 4);
+  tex.repeat.set(3, 5);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildEndcapTexture(isNight: boolean): THREE.CanvasTexture {
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+
+  const g = ctx.createRadialGradient(cx, cy, 18, cx, cy, size * 0.5);
+  if (isNight) {
+    g.addColorStop(0.0, '#9bd6ff');
+    g.addColorStop(0.24, '#243554');
+    g.addColorStop(0.75, '#172238');
+    g.addColorStop(1.0, '#0f182a');
+  } else {
+    g.addColorStop(0.0, '#eef7fc');
+    g.addColorStop(0.22, '#bdd4e3');
+    g.addColorStop(0.65, '#c7cfbf');
+    g.addColorStop(1.0, '#aeb9b0');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  // Subtle concentric architectural rings (inspired by Spinward Endcap horizon!)
+  ctx.strokeStyle = isNight ? 'rgba(130, 175, 225, 0.28)' : 'rgba(105, 118, 128, 0.25)';
+  for (let r = 34; r < 252; r += 26) {
+    ctx.lineWidth = r < 90 ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 12; i++) {
+    const a = (i * Math.PI) / 6;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * 32, cy + Math.sin(a) * 32);
+    ctx.lineTo(cx + Math.cos(a) * 252, cy + Math.sin(a) * 252);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   return tex;
 }
 
 /**
- * 3D interior model of our O'Neill Cylinder ("Cooper Station") habitat.
- * Holds 3 curved Continent Land Strips, 3 Skylight Bays, structural arch ribs,
- * North/South geodesic endcaps, 9 curated miniature plot clusters, 3 animated trams,
- * and floating axis cloud puffs.
+ * Spinward-scale O'Neill Cylinder sky vault (R=320m, L=1100m) enveloping the flat 22×22 diorama plot.
+ * Combines a seamlessly blended flat extended park neighborhood with monumental overhead curving continents,
+ * angled skylight mirrors, gliding airships, and a distant circular conservatory hub at the horizon.
  */
-export class CylinderWorld {
+export class GroundBackdropWorld {
   readonly root = new THREE.Group();
-  private plots: CylinderPlotDef[] = INITIAL_CYLINDER_PLOTS.map((p) => ({ ...p }));
-  private plotGroups = new Map<string, THREE.Group>();
-  private pickMeshes: THREE.Mesh[] = [];
-  private beaconRings = new Map<string, THREE.Mesh>();
+  private vaultGroup = new THREE.Group();
+  private neighborhoodGroup = new THREE.Group();
+  private dynamicGroup = new THREE.Group();
 
-  private skyShellMat: THREE.MeshBasicMaterial;
+  private floorMat: THREE.MeshLambertMaterial;
+  private overheadMats: THREE.MeshLambertMaterial[] = [];
+  private skyMat: THREE.MeshBasicMaterial;
+  private endcapMat: THREE.MeshBasicMaterial;
+
+  private floorTex: THREE.CanvasTexture | null = null;
+  private cityDayTexs: THREE.CanvasTexture[] = [];
+  private cityNightTexs: THREE.CanvasTexture[] = [];
   private skyDayTex: THREE.CanvasTexture;
   private skyNightTex: THREE.CanvasTexture;
-  private stripTextures: THREE.CanvasTexture[] = [];
+  private endcapDayTex: THREE.CanvasTexture;
+  private endcapNightTex: THREE.CanvasTexture;
 
-  private trams: Array<{ group: THREE.Group; strip: ContinentStripId; phase: number }> = [];
-  private clouds: Array<{ mesh: THREE.Mesh; baseX: number; baseY: number; baseZ: number; phase: number }> = [];
-  private millBlades: THREE.Object3D[] = [];
-  private sailboats: Array<{ mesh: THREE.Object3D; phase: number }> = [];
-  private solarRing: THREE.Group | null = null;
-  private polarBeaconMat: THREE.MeshLambertMaterial | null = null;
-  private northEndcapMat: THREE.MeshLambertMaterial | null = null;
-  private customPlotGroup: THREE.Group | null = null;
+  private hubWheel: THREE.Group | null = null;
+  private airships: Array<{ group: THREE.Group; baseX: number; baseY: number; baseZ: number; speed: number; phase: number }> = [];
+  private walkers: Array<{ group: THREE.Group; ax: number; az: number; range: number; axis: 'x' | 'z'; phase: number }> = [];
+  private doorwayMarker: THREE.Group | null = null;
 
   constructor(
     parentScene: THREE.Scene,
     private uniforms: WorldShaderUniforms,
   ) {
-    this.skyDayTex = buildSkyBackingTexture(false);
-    this.skyNightTex = buildSkyBackingTexture(true);
-    this.skyShellMat = new THREE.MeshBasicMaterial({
-      map: this.skyDayTex,
-      side: THREE.BackSide,
-      color: '#ffffff',
-    });
+    this.floorMat = new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true });
+    attachStorybookSurfaceShader(this.floorMat, this.uniforms, { snowCap: false, isWindow: false });
 
-    this.buildShellAndRibs();
-    this.buildContinentStrips();
-    this.buildEndcaps();
-    this.buildCuratedPlots();
-    this.buildAmbientValleyProps();
-    this.buildRingTrams();
-    this.buildAxisClouds();
+    this.skyDayTex = buildSkyVaultTexture(false);
+    this.skyNightTex = buildSkyVaultTexture(true);
+    this.skyMat = new THREE.MeshBasicMaterial({ map: this.skyDayTex, side: THREE.BackSide });
 
+    this.endcapDayTex = buildEndcapTexture(false);
+    this.endcapNightTex = buildEndcapTexture(true);
+    this.endcapMat = new THREE.MeshBasicMaterial({ map: this.endcapDayTex, side: THREE.DoubleSide });
+
+    for (let i = 1; i <= 2; i++) {
+      this.cityDayTexs.push(buildOverheadCityTexture(i, false));
+      this.cityNightTexs.push(buildOverheadCityTexture(i, true));
+    }
+
+    this.buildSkyVault();
+    this.buildSkyProps();
+    this.root.add(this.vaultGroup, this.neighborhoodGroup, this.dynamicGroup);
     parentScene.add(this.root);
   }
 
   private mkMat(
     hex: string | number,
-    opts: { snowCap?: boolean; isWindow?: boolean; isLantern?: boolean } = {},
+    opts: { isWindow?: boolean; isLantern?: boolean } = {},
   ): THREE.MeshLambertMaterial {
     const m = new THREE.MeshLambertMaterial({ color: hex, flatShading: true });
     attachStorybookSurfaceShader(m, this.uniforms, {
-      snowCap: opts.snowCap ?? false,
+      snowCap: false,
       isWindow: opts.isWindow ?? false,
       isLantern: opts.isLantern ?? false,
     });
     return m;
   }
 
-  /**
-   * Place a local-Y-up object cleanly onto the cylinder inner wall at `(theta, z)`.
-   * Setting `rotation.z = theta` maps local `+Y` straight inward to `(0, 0, z)`.
-   */
-  private placeOnCylinder(obj: THREE.Object3D, theta: number, z: number, radialInset = 0): void {
-    const r = CYLINDER_RADIUS - radialInset;
-    obj.position.set(r * Math.sin(theta), -r * Math.cos(theta), z);
-    obj.rotation.z = theta;
-  }
-
-  private buildShellAndRibs(): void {
-    // 1. Outer Skylight Sky/Cosmos Backing Cylinder (radius slightly larger than strips so strips project cleanly inward)
+  private buildSkyVault(): void {
+    // 1. Outer Skylight Sky Shell (R = 348, 64 segs -> stays strictly outside Strip 0 hillsides everywhere!)
     const skyGeo = new THREE.CylinderGeometry(
-      CYLINDER_RADIUS + 2.2,
-      CYLINDER_RADIUS + 2.2,
-      CYLINDER_LENGTH + 4,
-      48,
+      CYLINDER_RADIUS + 28,
+      CYLINDER_RADIUS + 28,
+      CYLINDER_LENGTH + 40,
+      64,
       1,
       true,
     );
     skyGeo.rotateX(Math.PI * 0.5);
-    const skyMesh = new THREE.Mesh(skyGeo, this.skyShellMat);
-    this.root.add(skyMesh);
+    const skyMesh = new THREE.Mesh(skyGeo, this.skyMat);
+    skyMesh.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z);
+    this.vaultGroup.add(skyMesh);
 
-    const frameMat = this.mkMat('#4e5864');
-    const strutMat = this.mkMat('#697482');
+    // 2. Bottom Valley Strip (Strip 0): seamlessly flat underfoot (y = -0.045), curving upward into sides & hills!
+    const bottomGeo = buildBottomValleyStripGeometry(STRIP_ARC_HALF, CYLINDER_LENGTH, CYLINDER_RADIUS);
+    const bottomMesh = new THREE.Mesh(bottomGeo, this.floorMat);
+    bottomMesh.receiveShadow = true;
+    this.vaultGroup.add(bottomMesh);
 
-    // 2. 9 Full-Circle Circumferential Structural Arch Ribs along z = -90 .. +90
-    for (let i = 0; i <= 8; i++) {
-      const z = -HALF_LEN + (i / 8) * CYLINDER_LENGTH;
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(CYLINDER_RADIUS + 0.15, 0.55, 6, 60), frameMat);
-      ring.position.set(0, 0, z);
-      this.root.add(ring);
-    }
-
-    // 3. Longitudinal Skylight Window Mullions across the 3 sky bays (centered at 60°, 180°, 300°)
-    const mulGeo = new THREE.BoxGeometry(0.45, 0.65, CYLINDER_LENGTH);
-    for (let bay = 0; bay < 3; bay++) {
-      const bayCenter = (bay * Math.PI * 2) / 3 + Math.PI / 3;
-      for (const offset of [-0.32, 0, 0.32]) {
-        const theta = bayCenter + offset;
-        const mul = new THREE.Mesh(mulGeo, strutMat);
-        this.placeOnCylinder(mul, theta, 0, -1.2);
-        this.root.add(mul);
-      }
-      // Strip border girders flanking each skylight bay
-      for (const edge of [-STRIP_ARC_HALF, STRIP_ARC_HALF]) {
-        const landTheta = (bay * Math.PI * 2) / 3 + edge;
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.35, CYLINDER_LENGTH), frameMat);
-        this.placeOnCylinder(beam, landTheta, 0, 0.25);
-        this.root.add(beam);
-      }
-    }
-  }
-
-  private buildContinentStrips(): void {
-    for (const strip of CONTINENT_STRIPS) {
-      const geo = buildCurvedStripGeometry(
-        strip.theta,
-        STRIP_ARC_HALF,
-        CYLINDER_LENGTH,
-        CYLINDER_RADIUS,
-        24,
-        36,
-      );
-      const tex = buildContinentTexture(strip.id);
-      this.stripTextures.push(tex);
-      const mat = new THREE.MeshLambertMaterial({
-        map: tex,
-        flatShading: true,
-      });
+    // 3. Upper-Left & Upper-Right Overhead Inverted Continent Strips (120° & 240°) with colorful city-skyline relief
+    const towerPal = ['#d6c9b4', '#c97e68', '#7d92a4', '#e3d8c0', '#b89f78'];
+    [1, 2].forEach((stripId, idx) => {
+      const thetaCenter = CONTINENT_STRIPS[stripId].theta;
+      const geo = buildOverheadContinentGeometry(thetaCenter, STRIP_ARC_HALF, CYLINDER_LENGTH, CYLINDER_RADIUS);
+      const mat = new THREE.MeshLambertMaterial({ map: this.cityDayTexs[idx], flatShading: true });
       attachStorybookSurfaceShader(mat, this.uniforms, { snowCap: false, isWindow: false });
+      this.overheadMats.push(mat);
       const mesh = new THREE.Mesh(geo, mat);
-      this.root.add(mesh);
-    }
-  }
+      this.vaultGroup.add(mesh);
 
-  private buildEndcaps(): void {
-    const steel = this.mkMat('#55606e');
-    const darkTrim = this.mkMat('#39414c');
-    const iceCol = this.mkMat('#e6eff5');
-    const glacierBlue = this.mkMat('#8cc4d8');
-    this.polarBeaconMat = this.mkMat('#8ee8ff', { isLantern: true });
-    const solarAmber = this.mkMat('#ffd373', { isLantern: true });
-
-    const buildCap = (zPos: number, isNorthPolar: boolean) => {
-      const cap = new THREE.Group();
-      cap.position.set(0, 0, zPos);
-
-      // Stepped outer concentric structural rings
-      for (const [r, t] of [
-        [CYLINDER_RADIUS - 0.5, 1.1],
-        [CYLINDER_RADIUS * 0.66, 0.7],
-        [CYLINDER_RADIUS * 0.34, 0.55],
-      ] as Array<[number, number]>) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, t, 6, 48), steel);
-        cap.add(ring);
-      }
-
-      // 12 radial geodesic spokes converging onto central observation hub
-      const spokeGeo = new THREE.BoxGeometry(0.9, CYLINDER_RADIUS * 2, 0.9);
-      for (let i = 0; i < 6; i++) {
-        const spoke = new THREE.Mesh(spokeGeo, darkTrim);
-        spoke.rotation.z = (i * Math.PI) / 6;
-        cap.add(spoke);
-      }
-
-      // Outer backdrop disc behind spokes so endcap reads as enclosed geodesic conservatory glass
-      const panMat = new THREE.MeshLambertMaterial({
-        color: isNorthPolar ? '#cfe2ed' : '#b7d0df',
-        side: THREE.DoubleSide,
-        flatShading: true,
-      });
-      attachStorybookSurfaceShader(panMat, this.uniforms, { snowCap: false, isWindow: false });
-      if (isNorthPolar) this.northEndcapMat = panMat;
-      const disc = new THREE.Mesh(new THREE.CircleGeometry(CYLINDER_RADIUS + 2.2, 36), panMat);
-      disc.position.z = isNorthPolar ? -1.4 : 1.4;
-      cap.add(disc);
-
-      if (isNorthPolar) {
-        // Polar Glacier Observatory Landmark + Glowing Beacon Spire (replaces empty Antarctica continent!)
-        const dirSign = 1; // points inward (+Z)
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(8.5, 11.5, 4.5, 8), iceCol);
-        base.rotation.x = Math.PI * 0.5;
-        base.position.z = dirSign * 2.2;
-        cap.add(base);
-
-        for (let k = 0; k < 6; k++) {
-          const ang = (k * Math.PI) / 3;
-          const crag = new THREE.Mesh(new THREE.ConeGeometry(3.4, 7.5, 5), glacierBlue);
-          crag.rotation.x = Math.PI * 0.5;
-          crag.position.set(Math.cos(ang) * 7.5, Math.sin(ang) * 7.5, dirSign * 3.0);
-          cap.add(crag);
-        }
-
-        const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 12.0, 8), steel);
-        tower.rotation.x = Math.PI * 0.5;
-        tower.position.z = dirSign * 7.5;
-        cap.add(tower);
-
-        const beacon = new THREE.Mesh(new THREE.IcosahedronGeometry(2.6, 1), this.polarBeaconMat!);
-        beacon.position.z = dirSign * 14.5;
-        cap.add(beacon);
-      } else {
-        // South Horizon Sunlit Conservatory Ring
-        const hub = new THREE.Group();
-        hub.position.z = -3.0;
-        const innerDisk = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 8.8, 3.2, 12), steel);
-        innerDisk.rotation.x = Math.PI * 0.5;
-        hub.add(innerDisk);
-
-        const sunRing = new THREE.Mesh(new THREE.TorusGeometry(9.5, 0.75, 6, 24), solarAmber);
-        hub.add(sunRing);
-        this.solarRing = hub;
-        cap.add(hub);
-      }
-
-      this.root.add(cap);
-    };
-
-    buildCap(-HALF_LEN, true);
-    buildCap(HALF_LEN, false);
-  }
-
-  private createMiniatureHouse(
-    w: number,
-    h: number,
-    d: number,
-    wallCol: string,
-    roofCol: string,
-    roofStyle: 'gable' | 'flat' | 'dome' = 'gable',
-  ): THREE.Group {
-    const g = new THREE.Group();
-    const wallMat = this.mkMat(wallCol);
-    const roofMat = this.mkMat(roofCol);
-    const winMat = this.mkMat('#344254', { isWindow: true });
-
-    const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
-    body.position.y = h * 0.5;
-    g.add(body);
-
-    const winBar = new THREE.Mesh(new THREE.BoxGeometry(w * 0.72, h * 0.28, d + 0.08), winMat);
-    winBar.position.y = h * 0.56;
-    g.add(winBar);
-
-    if (roofStyle === 'gable') {
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.78, h * 0.55, 4), roofMat);
-      roof.position.y = h + h * 0.27;
-      roof.rotation.y = Math.PI * 0.25;
-      g.add(roof);
-    } else if (roofStyle === 'dome') {
-      const dome = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.min(w, d) * 0.44, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.5),
-        roofMat,
-      );
-      dome.position.y = h;
-      g.add(dome);
-    } else {
-      const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.14, 0.18, d + 0.14), roofMat);
-      parapet.position.y = h + 0.09;
-      g.add(parapet);
-    }
-    return g;
-  }
-
-  private createMiniTree(foliageHex: string, scale = 1.0, pine = false): THREE.Group {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 0.95, 5), this.mkMat('#6c5646'));
-    trunk.position.y = 0.45;
-    g.add(trunk);
-
-    const leafMat = this.mkMat(foliageHex);
-    if (pine) {
-      const c1 = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.5, 6), leafMat);
-      c1.position.y = 1.45;
-      const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.62, 1.2, 6), leafMat);
-      c2.position.y = 2.15;
-      g.add(c1, c2);
-    } else {
-      const cr = new THREE.Mesh(new THREE.IcosahedronGeometry(0.85, 1), leafMat);
-      cr.scale.set(1.15, 0.78, 1.15);
-      cr.position.y = 1.35;
-      g.add(cr);
-    }
-    g.scale.setScalar(scale);
-    return g;
-  }
-
-  private buildPlotCluster(plot: CylinderPlotDef): THREE.Group {
-    const grp = new THREE.Group();
-    const strip = CONTINENT_STRIPS[plot.strip];
-    // Slight angular offset per strip plot edge for visual rhythm inside the wide strip
-    const thetaOff = plot.isCustomUserPlot ? -0.18 : 0.05;
-    this.placeOnCylinder(grp, strip.theta + thetaOff, plot.axialZ, 0.05);
-
-    // Architectural Plot Frame Plinth (13.5 x 13.5)
-    const plinthHex = plot.isCustomUserPlot ? '#e5ca85' : '#cfc2a7';
-    const plinth = new THREE.Mesh(new THREE.BoxGeometry(13.6, 0.32, 13.6), this.mkMat(plinthHex));
-    plinth.position.y = 0.14;
-    grp.add(plinth);
-
-    // Subtle glowing focus selection frame ring (scaled smoothly in update())
-    const ringMat = this.mkMat('#e8a84c', { isLantern: true });
-    const beaconRing = new THREE.Mesh(new THREE.BoxGeometry(14.3, 0.16, 14.3), ringMat);
-    beaconRing.position.y = 0.06;
-    beaconRing.visible = false;
-    grp.add(beaconRing);
-    this.beaconRings.set(plot.id, beaconRing);
-
-    // 4 Corner Architectural Lantern Bollards
-    const lampMat = this.mkMat('#ffe594', { isLantern: true });
-    const postMat = this.mkMat('#3c4148');
-    for (const [bx, bz] of [
-      [-6.3, -6.3],
-      [6.3, -6.3],
-      [-6.3, 6.3],
-      [6.3, 6.3],
-    ] as Array<[number, number]>) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.0, 5), postMat);
-      post.position.set(bx, 0.65, bz);
-      const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), lampMat);
-      bulb.position.set(bx, 1.2, bz);
-      grp.add(post, bulb);
-    }
-
-    // Bespoke City Architecture inside Plinth
-    const pid = plot.id;
-    if (pid === 'sydney') {
-      const bay = new THREE.Mesh(new THREE.CylinderGeometry(5.0, 5.0, 0.12, 16), this.mkMat('#4bbbd0'));
-      bay.position.set(0.6, 0.3, 2.4);
-      grp.add(bay);
-
-      // White Opera Sails silhouette
-      const sailMat = this.mkMat('#f8f4eb');
-      for (const [sx, sz, h, rot] of [
-        [2.6, -1.6, 3.3, -0.35],
-        [3.6, -1.2, 2.6, -0.25],
-        [1.7, -2.0, 2.2, -0.45],
-      ] as Array<[number, number, number, number]>) {
-        const shell = new THREE.Mesh(new THREE.ConeGeometry(1.15, h, 4), sailMat);
-        shell.scale.set(0.75, 1, 1.35);
-        shell.position.set(sx, 0.3 + h * 0.45, sz);
-        shell.rotation.z = rot;
-        grp.add(shell);
-      }
-
-      // Red-white coastal lighthouse
-      const lhBase = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.72, 1.8, 8), this.mkMat('#f6f2e8'));
-      lhBase.position.set(-4.0, 1.2, 2.8);
-      const lhMid = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 1.3, 8), this.mkMat('#cb4a3d'));
-      lhMid.position.set(-4.0, 2.65, 2.8);
-      const lhLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.6, 8), lampMat);
-      lhLamp.position.set(-4.0, 3.55, 2.8);
-      grp.add(lhBase, lhMid, lhLamp);
-
-      // Lush Purple Jacaranda bloom trees
-      for (const [tx, tz, sc, hex] of [
-        [-3.6, -2.8, 1.25, '#9b7be0'],
-        [-0.8, -3.6, 1.15, '#b698f0'],
-        [4.2, -4.0, 1.1, '#8c6bd4'],
-        [-1.6, 0.4, 1.05, '#a889e6'],
-        [4.5, 1.2, 1.0, '#9b7be0'],
-      ] as Array<[number, number, number, string]>) {
-        const jt = this.createMiniTree(hex, sc);
-        jt.position.set(tx, 0.25, tz);
-        grp.add(jt);
-      }
-
-      // Tiny bay sailboats
-      for (const [bx, bz, ph] of [
-        [0.0, 3.2, 0.4],
-        [2.2, 2.0, 2.1],
-      ] as Array<[number, number, number]>) {
-        const boat = new THREE.Group();
-        const hull = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.22, 1.1), this.mkMat('#f7f4ec'));
-        const sail = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.35, 3), sailMat);
-        sail.position.y = 0.75;
-        boat.add(hull, sail);
-        boat.position.set(bx, 0.42, bz);
-        grp.add(boat);
-        this.sailboats.push({ mesh: boat, phase: ph });
-      }
-    } else if (pid === 'guangzhou') {
-      // Lingnan evergreen terracotta + slate shophouse grid
-      for (const [hx, hz, w, h, d, rc] of [
-        [-2.8, -2.2, 3.2, 2.8, 2.4, '#b8644f'],
-        [1.2, -2.4, 3.6, 3.2, 2.5, '#596978'],
-        [-2.2, 2.0, 3.4, 2.4, 2.4, '#596978'],
-        [2.2, 1.8, 3.0, 2.9, 2.6, '#c26952'],
-      ] as Array<[number, number, number, number, number, string]>) {
-        const hh = this.createMiniatureHouse(w, h, d, '#efe8d8', rc, 'flat');
-        hh.position.set(hx, 0.25, hz);
-        grp.add(hh);
-      }
-      for (const [tx, tz] of [
-        [-4.5, 0.2],
-        [4.6, -1.0],
-        [-0.2, 4.4],
-        [0.4, -4.6],
-      ] as Array<[number, number]>) {
-        const banyan = this.createMiniTree('#679852', 1.1);
-        banyan.position.set(tx, 0.25, tz);
-        grp.add(banyan);
-      }
-    } else if (pid === 'wangshi') {
-      for (const [hx, hz, rc] of [
-        [-3.0, -2.5, '#596978'],
-        [-0.2, -3.2, '#596978'],
-        [-3.4, 1.5, '#687988'],
-      ] as Array<[number, number, string]>) {
-        const hh = this.createMiniatureHouse(2.4, 2.1, 2.0, '#f3ede0', rc, 'gable');
-        hh.position.set(hx, 0.25, hz);
-        grp.add(hh);
-      }
-      const tea = this.createMiniatureHouse(1.9, 1.4, 1.6, '#8a6856', '#c96858', 'gable');
-      tea.position.set(1.8, 0.25, 2.2);
-      grp.add(tea);
-      const pad = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.16, 5.0), this.mkMat('#b5ca5e'));
-      pad.position.set(3.2, 0.32, -1.8);
-      grp.add(pad);
-    } else if (pid === 'otaru') {
-      plinth.material = this.mkMat('#ebe7dc');
-      for (const [hx, hz] of [
-        [-3.2, -2.2],
-        [-3.2, 2.2],
-        [3.2, -1.8],
-        [3.2, 2.4],
-      ] as Array<[number, number]>) {
-        const wh = this.createMiniatureHouse(2.6, 2.3, 2.8, '#b57b66', '#ede9df', 'gable');
-        wh.position.set(hx, 0.25, hz);
-        grp.add(wh);
-      }
-      const canal = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.18, 12.6), this.mkMat('#9fc8d8'));
-      canal.position.set(0, 0.28, 0);
-      grp.add(canal);
-      for (const [tx, tz] of [
-        [-4.8, 4.8],
-        [4.8, -4.8],
-      ] as Array<[number, number]>) {
-        const pine = this.createMiniTree('#88a68c', 1.1, true);
-        pine.position.set(tx, 0.25, tz);
-        grp.add(pine);
-      }
-    } else if (pid === 'darrowby') {
-      plinth.material = this.mkMat('#e6e2d5');
-      const inn = this.createMiniatureHouse(3.0, 2.4, 2.2, '#e3dbc6', '#d6d4cc', 'gable');
-      inn.position.set(-2.6, 0.25, -2.4);
-      grp.add(inn);
-      const gh = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.5, 2.0), this.mkMat('#b5dedd'));
-      gh.position.set(1.6, 0.95, -2.2);
-      grp.add(gh);
-      // Windmill tower + animated blades
-      const millTower = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 1.0, 3.8, 7), this.mkMat('#dcd3be'));
-      millTower.position.set(3.2, 2.1, 2.4);
-      const hub = new THREE.Group();
-      hub.position.set(3.2, 3.6, 1.65);
-      const bladeMat = this.mkMat('#8a684a');
-      for (let b = 0; b < 2; b++) {
-        const bl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 3.2, 0.12), bladeMat);
-        bl.rotation.z = (b * Math.PI) / 2;
-        hub.add(bl);
-      }
-      this.millBlades.push(hub);
-      grp.add(millTower, hub);
-    } else if (pid === 'amsterdam') {
-      const canal = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.18, 12.6), this.mkMat('#6faec4'));
-      canal.position.set(0, 0.28, 0);
-      grp.add(canal);
-      const gableColors = ['#a85648', '#465868', '#c68a52', '#70584a'];
-      [-3.5, -0.5, 2.5].forEach((pz, i) => {
-        const h1 = this.createMiniatureHouse(1.7, 2.6 + (i % 2) * 0.6, 1.9, gableColors[i], '#3e4752', 'gable');
-        h1.position.set(-3.2, 0.25, pz);
-        const h2 = this.createMiniatureHouse(1.7, 2.4 + ((i + 1) % 2) * 0.7, 1.9, gableColors[(i + 2) % 4], '#3e4752', 'gable');
-        h2.position.set(3.2, 0.25, pz);
-        grp.add(h1, h2);
-      });
-    } else if (pid === 'santorini') {
-      const sea = new THREE.Mesh(new THREE.BoxGeometry(12.6, 0.16, 4.6), this.mkMat('#419ec2'));
-      sea.position.set(0, 0.28, 3.4);
-      grp.add(sea);
-      for (const [hx, hz, h, dome] of [
-        [-3.2, -2.5, 2.2, true],
-        [0.0, -3.0, 2.8, true],
-        [3.2, -2.2, 2.0, false],
-        [-1.8, -0.2, 1.6, false],
-        [2.2, -0.4, 1.8, true],
-      ] as Array<[number, number, number, boolean]>) {
-        const hMesh = this.createMiniatureHouse(2.3, h, 2.1, '#f7f5ee', dome ? '#3269b0' : '#f2eee4', dome ? 'dome' : 'flat');
-        hMesh.position.set(hx, 0.25, hz);
-        grp.add(hMesh);
-      }
-    } else if (pid === 'quebec') {
-      plinth.material = this.mkMat('#e4dfd2');
-      for (const [hx, hz, h] of [
-        [-2.8, -1.8, 3.2],
-        [1.4, -2.6, 2.5],
-        [-1.6, 2.2, 2.3],
-      ] as Array<[number, number, number]>) {
-        const chateau = this.createMiniatureHouse(2.6, h, 2.4, '#d9cdb6', '#568577', 'gable');
-        chateau.position.set(hx, 0.25, hz);
-        grp.add(chateau);
-      }
-      for (const [tx, tz, hex] of [
-        [3.8, 1.8, '#d45e3e'],
-        [4.2, -2.2, '#e29f42'],
-        [-4.4, 2.6, '#c84f39'],
-      ] as Array<[number, number, string]>) {
-        const maple = this.createMiniTree(hex, 1.15);
-        maple.position.set(tx, 0.25, tz);
-        grp.add(maple);
-      }
-    } else if (pid === 'sanfrancisco') {
-      const pastels = ['#e2928e', '#9dc6a8', '#e8cf86', '#94b9d6'];
-      pastels.forEach((col, idx) => {
-        const rowHouse = this.createMiniatureHouse(1.85, 2.8, 2.2, col, '#5d626e', 'gable');
-        rowHouse.position.set(-3.4 + idx * 2.2, 0.25, -2.4);
-        grp.add(rowHouse);
-      });
-      for (const [tx, tz] of [
-        [-3.8, 2.4],
-        [0.4, 2.8],
-        [3.8, 2.0],
-      ] as Array<[number, number]>) {
-        const tree = this.createMiniTree('#72a058', 1.1);
-        tree.position.set(tx, 0.25, tz);
-        grp.add(tree);
-      }
-    } else {
-      // Custom user-generated plot beacon monument
-      for (const [hx, hz, w, h] of [
-        [-2.4, -1.8, 2.6, 2.6],
-        [2.0, -2.0, 2.4, 3.0],
-        [-1.8, 2.0, 2.4, 2.1],
-      ] as Array<[number, number, number, number]>) {
-        const block = this.createMiniatureHouse(w, h, 2.2, '#efe7d4', '#596978', 'flat');
-        block.position.set(hx, 0.25, hz);
-        grp.add(block);
-      }
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(0.75, 4.2, 6), lampMat);
-      spire.position.set(2.2, 2.4, 2.0);
-      grp.add(spire);
-    }
-
-    // Raycast hitbox (kept visible=false until pickPlot() so Pass 2 InkPipeline never outlines it!)
-    const hitMat = new THREE.MeshBasicMaterial({
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-    });
-    const hitbox = new THREE.Mesh(new THREE.BoxGeometry(15.2, 9.0, 15.2), hitMat);
-    hitbox.position.y = 4.2;
-    hitbox.visible = false;
-    hitbox.userData.plotId = plot.id;
-    grp.add(hitbox);
-    this.pickMeshes.push(hitbox);
-
-    this.plotGroups.set(plot.id, grp);
-    this.root.add(grp);
-    return grp;
-  }
-
-  private buildCuratedPlots(): void {
-    for (const p of this.plots) {
-      this.buildPlotCluster(p);
-    }
-  }
-
-  private buildAmbientValleyProps(): void {
-    let seed = 409;
-    const rnd = () => {
-      seed = (seed * 16807) % 2147483647;
-      return (seed - 1) / 2147483646;
-    };
-
-    for (const strip of CONTINENT_STRIPS) {
-      for (const zBand of [-70, -22, 22, 70]) {
-        for (let k = 0; k < 6; k++) {
-          const theta = strip.theta + (rnd() - 0.5) * 0.85;
-          const pz = zBand + (rnd() - 0.5) * 14;
-          const obj = new THREE.Group();
-          this.placeOnCylinder(obj, theta, pz, 0.04);
-
-          if (zBand < -30) {
-            obj.add(this.createMiniTree('#88a88d', 0.85 + rnd() * 0.45, true));
-          } else if (zBand < 30) {
-            if (k === 0) {
-              obj.add(this.createMiniatureHouse(1.8, 1.4, 1.5, '#eae2ce', '#b6745a', 'gable'));
-            } else {
-              obj.add(this.createMiniTree(k % 2 === 0 ? '#78a556' : '#c69a50', 0.8 + rnd() * 0.45));
-            }
-          } else {
-            obj.add(
-              this.createMiniTree(
-                strip.id === 2 && k % 2 === 0 ? '#9e7fe0' : '#6ea25a',
-                0.85 + rnd() * 0.4,
-              ),
-            );
-          }
-          this.root.add(obj);
-        }
-      }
-    }
-  }
-
-  private buildRingTrams(): void {
-    const tramColors = ['#d9654c', '#3d7991', '#916ec9'];
-    for (const strip of CONTINENT_STRIPS) {
-      const tram = new THREE.Group();
-      const bodyMat = this.mkMat('#f7f1e0');
-      const stripeMat = this.mkMat(tramColors[strip.id]);
-      const winMat = this.mkMat('#2e3c4c', { isWindow: true });
-      const glowMat = this.mkMat('#ffe99b', { isLantern: true });
-
-      const car = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.1, 4.4), bodyMat);
-      car.position.y = 0.72;
-      const band = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.35, 4.45), stripeMat);
-      band.position.y = 0.52;
-      const win = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.38, 3.6), winMat);
-      win.position.y = 0.92;
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.32, 0.16), glowMat);
-      head.position.set(0, 0.55, -2.25);
-      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.32, 0.16), glowMat);
-      tail.position.set(0, 0.55, 2.25);
-
-      tram.add(car, band, win, head, tail);
-      const tramTheta = strip.theta - STRIP_ARC_HALF * 0.28;
-      this.placeOnCylinder(tram, tramTheta, 0, 0.05);
-      this.root.add(tram);
-      this.trams.push({ group: tram, strip: strip.id, phase: strip.id * 2.1 });
-    }
-  }
-
-  private buildAxisClouds(): void {
-    const cloudMat = this.mkMat('#fbf8ef');
-    let seed = 883;
-    const rnd = () => {
-      seed = (seed * 16807) % 2147483647;
-      return (seed - 1) / 2147483646;
-    };
-
-    for (let i = 0; i < 22; i++) {
-      const puff = new THREE.Group();
-      const parts = 2 + (i % 3);
-      for (let p = 0; p < parts; p++) {
-        const s = new THREE.Mesh(new THREE.IcosahedronGeometry(1.05 + (p === 0 ? 0.35 : 0), 1), cloudMat);
-        s.position.set((p - 1) * 0.95, (rnd() - 0.5) * 0.3, (rnd() - 0.5) * 0.6);
-        s.scale.set(1.3, 0.62, 1.0);
-        puff.add(s);
-      }
-      const ang = rnd() * Math.PI * 2;
-      const rad = 12 + rnd() * 14;
-      const baseX = Math.cos(ang) * rad;
-      const baseY = Math.sin(ang) * rad;
-      const baseZ = -76 + rnd() * 122;
-      puff.position.set(baseX, baseY, baseZ);
-      this.root.add(puff);
-      // Push first child mesh reference or wrap cleanly; cast puff to Mesh container type
-      this.clouds.push({
-        mesh: puff as unknown as THREE.Mesh,
-        baseX,
-        baseY,
-        baseZ,
-        phase: rnd() * Math.PI * 2,
-      });
-    }
-  }
-
-  upsertCustomPlot(label: string, lat: number, lon: number): CylinderPlotDef {
-    const routed = routeCoordsToCylinder(lat, lon, this.plots);
-    const shortLabel = label.length > 9 ? `${label.slice(0, 9)}…` : label;
-
-    let def = this.plots.find((p) => p.isCustomUserPlot);
-    if (!def) {
-      def = {
-        id: 'custom_user',
-        name: label,
-        shortLabel,
-        icon: '📍',
-        strip: routed.strip,
-        axialZ: routed.axialZ,
-        climateTag: routed.climateLabel,
-        subtitle: `${routed.stripName} · 玩家自建 OSM 地块（${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}）`,
-        osmCoords: { lat, lon, label },
-        isCustomUserPlot: true,
+      // 1-draw-call InstancedMesh low-poly megacity blocks overhead with colored rooftops/walls!
+      const count = 200;
+      const blockGeo = new THREE.BoxGeometry(6.8, 1, 6.8);
+      const blockMat = this.mkMat('#ffffff', { isWindow: false });
+      const inst = new THREE.InstancedMesh(blockGeo, blockMat, count);
+      const dummy = new THREE.Object3D();
+      const col = new THREE.Color();
+      let seed = 7001 + idx * 911;
+      const rnd = () => {
+        seed = (seed * 16807) % 2147483647;
+        return (seed - 1) / 2147483646;
       };
-      this.plots.push(def);
-    } else {
-      def.name = label;
-      def.shortLabel = shortLabel;
-      def.strip = routed.strip;
-      def.axialZ = routed.axialZ;
-      def.climateTag = routed.climateLabel;
-      def.subtitle = `${routed.stripName} · 玩家自建 OSM 地块（${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}）`;
-      def.osmCoords = { lat, lon, label };
-    }
-
-    if (this.customPlotGroup) {
-      this.root.remove(this.customPlotGroup);
-      this.pickMeshes = this.pickMeshes.filter((m) => m.userData.plotId !== 'custom_user');
-      this.beaconRings.delete('custom_user');
-      this.plotGroups.delete('custom_user');
-    }
-    this.customPlotGroup = this.buildPlotCluster(def);
-    return def;
-  }
-
-  getPlots(): CylinderPlotDef[] {
-    return this.plots;
-  }
-
-  getPlotById(id: string): CylinderPlotDef | undefined {
-    return this.plots.find((p) => p.id === id);
-  }
-
-  pickPlot(raycaster: THREE.Raycaster): CylinderPlotDef | null {
-    for (const m of this.pickMeshes) m.visible = true;
-    const hits = raycaster.intersectObjects(this.pickMeshes, false);
-    for (const m of this.pickMeshes) m.visible = false;
-    if (hits.length === 0) return null;
-    const pid = hits[0].object.userData.plotId as string | undefined;
-    if (!pid) return null;
-    return this.getPlotById(pid) ?? null;
-  }
-
-  getProjectedPins(
-    camera: THREE.PerspectiveCamera,
-    cssWidth: number,
-    cssHeight: number,
-    focusedPlotId: string,
-  ): ProjectedPlotPin[] {
-    const out: ProjectedPlotPin[] = [];
-    const anchorLocal = new THREE.Vector3(0, 4.2, 0);
-    const wp = new THREE.Vector3();
-    const camPos = camera.position;
-    const camDir = new THREE.Vector3();
-    camera.getWorldDirection(camDir);
-    const toPin = new THREE.Vector3();
-
-    this.root.updateMatrixWorld(true);
-    for (const plot of this.plots) {
-      const grp = this.plotGroups.get(plot.id);
-      if (!grp) continue;
-      wp.copy(anchorLocal).applyMatrix4(grp.matrixWorld);
-      toPin.copy(wp).sub(camPos);
-      const dist = toPin.length();
-      if (toPin.dot(camDir) <= 1.0) continue; // behind camera
-
-      const ndc = wp.clone().project(camera);
-      if (Math.abs(ndc.x) > 0.96 || Math.abs(ndc.y) > 0.92 || ndc.z > 1) continue;
-
-      const x = (ndc.x * 0.5 + 0.5) * cssWidth;
-      const y = (-ndc.y * 0.5 + 0.5) * cssHeight;
-      out.push({
-        plot,
-        x,
-        y,
-        visible: true,
-        isOverhead: wp.y > 0,
-        isFocused: plot.id === focusedPlotId,
-        dist,
-      });
-    }
-    return out;
-  }
-
-  applyAtmosphere(timeMode: TimeMode, renderStyle: RenderStyleId): void {
-    const isNight = timeMode === 'night' || timeMode === 'eclipse';
-    this.skyShellMat.map = isNight ? this.skyNightTex : this.skyDayTex;
-    if (timeMode === 'sunset') {
-      this.skyShellMat.color.set('#f6cfb5');
-    } else if (timeMode === 'morning') {
-      this.skyShellMat.color.set('#f5ebe4');
-    } else if (renderStyle === 'hd' && !isNight) {
-      this.skyShellMat.color.set('#d5ebf8');
-    } else {
-      this.skyShellMat.color.set('#ffffff');
-    }
-    this.skyShellMat.needsUpdate = true;
-
-    if (this.polarBeaconMat) {
-      this.polarBeaconMat.color.set(isNight ? '#a8f2ff' : '#d2f7ff');
-    }
-    if (this.northEndcapMat) {
-      this.northEndcapMat.color.set(
-        isNight ? '#182540' : timeMode === 'sunset' ? '#d9b5a0' : '#cfe2ed',
-      );
-    }
-  }
-
-  update(dt: number, simTime: number, focusedPlotId: string): void {
-    // Animate circumferential transit trams back and forth along each continent strip
-    for (const tr of this.trams) {
-      const z = Math.sin(simTime * 0.16 + tr.phase) * 68;
-      tr.group.position.z = z;
-    }
-
-    // Drift axis clouds softly along cylinder longitudinal wind stream
-    for (const c of this.clouds) {
-      c.mesh.position.z = c.baseZ + Math.sin(simTime * 0.14 + c.phase) * 7.5;
-      c.mesh.position.x = c.baseX + Math.cos(simTime * 0.18 + c.phase) * 1.1;
-    }
-
-    for (const bl of this.millBlades) {
-      bl.rotation.z += dt * 1.4;
-    }
-
-    for (const sb of this.sailboats) {
-      sb.mesh.rotation.z = Math.sin(simTime * 2.1 + sb.phase) * 0.08;
-    }
-
-    if (this.solarRing) {
-      this.solarRing.rotation.z += dt * 0.18;
-    }
-
-    const pulse = 1.0 + Math.sin(simTime * 3.8) * 0.025;
-    for (const [id, ring] of this.beaconRings.entries()) {
-      const active = id === focusedPlotId;
-      ring.visible = active;
-      if (active) {
-        ring.scale.set(pulse, 1, pulse);
+      for (let k = 0; k < count; k++) {
+        const side = k % 2 === 0 ? 1 : -1;
+        const angOff = side * (0.14 + rnd() * (STRIP_ARC_HALF - 0.16));
+        const th = thetaCenter + angOff;
+        const zz = CYLINDER_CENTER_Z - 420 + rnd() * 760;
+        const bh = 8 + rnd() * 30;
+        const rad = CYLINDER_RADIUS - bh * 0.5;
+        dummy.position.set(rad * Math.sin(th), CYLINDER_RADIUS - rad * Math.cos(th), zz);
+        dummy.rotation.set(0, 0, th);
+        dummy.scale.set(0.95 + rnd() * 1.45, bh, 0.95 + rnd() * 1.55);
+        dummy.updateMatrix();
+        inst.setMatrixAt(k, dummy.matrix);
+        col.set(towerPal[k % towerPal.length]);
+        inst.setColorAt(k, col);
       }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.vaultGroup.add(inst);
+    });
+
+    // 4. Slender Skylight Margin Trim ONLY on upper overhead continent edges (leaves lower valley horizon open!)
+    const rimMat = this.mkMat('#8b9ba8');
+    for (const s of [CONTINENT_STRIPS[1], CONTINENT_STRIPS[2]]) {
+      for (const edge of [-STRIP_ARC_HALF, STRIP_ARC_HALF]) {
+        const th = s.theta + edge;
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, CYLINDER_LENGTH), rimMat);
+        rim.position.set(CYLINDER_RADIUS * Math.sin(th), CYLINDER_RADIUS * (1 - Math.cos(th)), CYLINDER_CENTER_Z);
+        rim.rotation.z = th;
+        this.vaultGroup.add(rim);
+      }
+    }
+
+    // 5. Distant Circular Conservatory Endcap Horizon + Suspended Zero-G Hub Wheel (z = -755)
+    const endcap = new THREE.Mesh(new THREE.CircleGeometry(CYLINDER_RADIUS + 8, 48), this.endcapMat);
+    endcap.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z - CYLINDER_LENGTH * 0.5 + 10);
+    this.vaultGroup.add(endcap);
+
+    const hub = new THREE.Group();
+    hub.position.set(0, CYLINDER_RADIUS, CYLINDER_CENTER_Z - CYLINDER_LENGTH * 0.5 + 22);
+    const hubMat = this.mkMat('#d8ccb2');
+    const hubGlow = this.mkMat('#ffe6a3', { isLantern: true });
+    hub.add(new THREE.Mesh(new THREE.TorusGeometry(64, 4.2, 8, 36), hubMat));
+    hub.add(new THREE.Mesh(new THREE.TorusGeometry(28, 2.8, 6, 24), hubGlow));
+    for (let i = 0; i < 4; i++) {
+      const sp = new THREE.Mesh(new THREE.BoxGeometry(3.5, 128, 3.5), hubMat);
+      sp.rotation.z = (i * Math.PI) / 4;
+      hub.add(sp);
+    }
+    this.hubWheel = hub;
+    this.vaultGroup.add(hub);
+  }
+
+  private buildSkyProps(): void {
+    // Stylized Dirigible Airships cruising quietly across the grand sky vault
+    const hullMat = this.mkMat('#f5efe0');
+    const finMat = this.mkMat('#c96852');
+    const gondMat = this.mkMat('#52606e');
+
+    for (let i = 0; i < 2; i++) {
+      const ship = new THREE.Group();
+      const env = new THREE.Mesh(new THREE.SphereGeometry(4.2, 14, 10), hullMat);
+      env.scale.set(1.0, 0.85, 3.1);
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.4, 4.5, 4.0), finMat);
+      fin.position.set(0, 1.4, 9.0);
+      const gond = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.4, 5.2), gondMat);
+      gond.position.set(0, -3.6, 0);
+      ship.add(env, fin, gond);
+      const bx = i === 0 ? -42 : 55;
+      const by = i === 0 ? 115 : 155;
+      const bz = i === 0 ? -210 : -340;
+      ship.position.set(bx, by, bz);
+      this.dynamicGroup.add(ship);
+      this.airships.push({ group: ship, baseX: bx, baseY: by, baseZ: bz, speed: 0.14 + i * 0.06, phase: i * 2.4 });
+    }
+  }
+
+  rebuildForRegion(region: RegionBlueprint, season: SeasonId, snowy: boolean): void {
+    this.floorTex?.dispose();
+    this.floorTex = buildFloorLandscapeTexture(region, season, snowy);
+    this.floorMat.map = this.floorTex;
+    this.floorMat.needsUpdate = true;
+
+    while (this.neighborhoodGroup.children.length > 0) {
+      this.neighborhoodGroup.remove(this.neighborhoodGroup.children[0]);
+    }
+    this.walkers = [];
+
+    // Stylized Midground Neighborhood outside [-12.5, +12.5] so streets flow naturally into the curving horizon
+    const wallMat = this.mkMat(region.palette.wallTone);
+    const roofMat = this.mkMat(snowy ? '#eae6dc' : region.palette.roofTone);
+    const altRoof = this.mkMat(snowy ? '#eae6dc' : '#65788a');
+    const winMat = this.mkMat('#2e3c4e', { isWindow: true });
+    const trunkMat = this.mkMat('#6b5545');
+    const lampPost = this.mkMat('#3c4148');
+    const lampBulb = this.mkMat('#ffe592', { isLantern: true });
+
+    const treeHex = snowy
+      ? '#cfd8d4'
+      : region.id === 'sydney' && (season === 'summer' || season === 'spring')
+        ? '#9b7be0'
+        : season === 'autumn'
+          ? '#d68846'
+          : '#6a9e52';
+    const treeHexAlt = snowy ? '#dde4e0' : '#73a659';
+    const leafMat1 = this.mkMat(treeHex);
+    const leafMat2 = this.mkMat(treeHexAlt);
+
+    let seed = 2309;
+    const rnd = () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    };
+
+    const addBuilding = (x: number, z: number, w: number, h: number, d: number, alt: boolean) => {
+      const y = groundBowlY(x, z);
+      const b = new THREE.Group();
+      b.position.set(x, y, z);
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+      body.position.y = h * 0.5;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      b.add(body);
+
+      const winBand = new THREE.Mesh(new THREE.BoxGeometry(w + 0.08, h * 0.55, d + 0.08), winMat);
+      winBand.position.y = h * 0.52;
+      b.add(winBand);
+
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.72, 1.8, 4), alt ? altRoof : roofMat);
+      roof.position.y = h + 0.9;
+      roof.rotation.y = Math.PI * 0.25;
+      b.add(roof);
+
+      this.neighborhoodGroup.add(b);
+    };
+
+    const addTree = (x: number, z: number, sc: number, purple: boolean) => {
+      const y = groundBowlY(x, z);
+      const tr = new THREE.Group();
+      tr.position.set(x, y, z);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.3, 6), trunkMat);
+      trunk.position.y = 0.65;
+      const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.15, 1), purple ? leafMat1 : leafMat2);
+      crown.scale.set(1.15, 0.85, 1.15);
+      crown.position.y = 1.95;
+      crown.castShadow = true;
+      tr.add(trunk, crown);
+      tr.scale.setScalar(sc);
+      this.neighborhoodGroup.add(tr);
+    };
+
+    // Place charming lower cottages well outside central bay/vista corridor (|x| >= 16.5)
+    const blocks: Array<[number, number, number, number, number]> = [
+      [-18, -22, 3.4, 2.8, 3.0],
+      [-28, -36, 3.8, 3.4, 3.4],
+      [-20, -52, 3.2, 2.6, 3.0],
+      [-34, -72, 4.0, 3.6, 3.6],
+      [-22, -96, 3.6, 3.2, 3.2],
+      [19, -20, 3.2, 2.6, 3.0],
+      [29, -34, 3.8, 3.2, 3.4],
+      [21, -54, 3.4, 2.8, 3.0],
+      [35, -74, 4.0, 3.5, 3.4],
+      [-23, 18, 3.4, 2.8, 3.0],
+      [24, 18, 3.6, 3.0, 3.2],
+    ];
+    blocks.forEach(([x, z, w, h, d], idx) => addBuilding(x, z, w, h, d, idx % 2 === 1));
+
+    // Boulevard trees & street lamps framing central promenade without blocking the sweeping center vista
+    for (let z = -110; z <= 32; z += 12) {
+      if (Math.abs(z) <= 12) continue;
+      addTree(-13.2 - rnd() * 2, z, 0.9 + rnd() * 0.3, rnd() > 0.35);
+      addTree(13.2 + rnd() * 2, z, 0.9 + rnd() * 0.3, rnd() > 0.35);
+
+      const ly = groundBowlY(-7.2, z);
+      const lamp = new THREE.Group();
+      lamp.position.set(-7.2, ly, z);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.8, 5), lampPost);
+      pole.position.y = 1.4;
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 6, 6), lampBulb);
+      bulb.position.y = 2.85;
+      lamp.add(pole, bulb);
+      this.neighborhoodGroup.add(lamp);
+    }
+    for (let i = 0; i < 28; i++) {
+      const tx = (rnd() > 0.5 ? 1 : -1) * (16 + rnd() * 44);
+      const tz = -130 + rnd() * 155;
+      if (Math.max(Math.abs(tx), Math.abs(tz)) <= 13.8) continue;
+      addTree(tx, tz, 0.9 + rnd() * 0.55, i % 2 === 0);
+    }
+
+    // 1-draw-call curving hillside villages climbing UP the left & right valley slopes (R=320 curvature!)
+    const slopeCount = 120;
+    const slopeMat = this.mkMat('#ffffff');
+    const slopeInst = new THREE.InstancedMesh(new THREE.BoxGeometry(4.2, 3.2, 4.2), slopeMat, slopeCount);
+    const sdum = new THREE.Object3D();
+    const scol = new THREE.Color();
+    const slopePal = ['#ede4d0', '#d28168', '#c8b896', '#72899c'];
+    for (let i = 0; i < slopeCount; i++) {
+      const sign = i % 2 === 0 ? -1 : 1;
+      const sx = sign * (56 + rnd() * 129);
+      const sz = -440 + rnd() * 490;
+      const sy = groundBowlY(sx, sz);
+      const tilt = Math.atan2(sx, CYLINDER_RADIUS);
+      sdum.position.set(sx, sy + 1.0, sz);
+      sdum.rotation.set(0, rnd() * 1.4, tilt);
+      const sc = 0.8 + rnd() * 1.25;
+      sdum.scale.set(sc, sc * (0.8 + rnd() * 0.9), sc);
+      sdum.updateMatrix();
+      slopeInst.setMatrixAt(i, sdum.matrix);
+      scol.set(slopePal[i % slopePal.length]);
+      slopeInst.setColorAt(i, scol);
+    }
+    slopeInst.instanceMatrix.needsUpdate = true;
+    if (slopeInst.instanceColor) slopeInst.instanceColor.needsUpdate = true;
+    this.neighborhoodGroup.add(slopeInst);
+
+    // Animated Pedestrian Walkers along park promenade (gives immediate Spinward human scale!)
+    const coatColors = ['#d6674c', '#3c6f94', '#e0a94c', '#4f8564'];
+    for (let i = 0; i < 6; i++) {
+      const p = new THREE.Group();
+      const coat = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 1.05, 6), this.mkMat(coatColors[i % 4]));
+      coat.position.y = 0.65;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), this.mkMat('#f0c8a8'));
+      head.position.y = 1.38;
+      p.add(coat, head);
+      const ax = i % 2 === 0 ? -4.4 : 4.2;
+      const az = i < 3 ? -18 - i * 11 : -2 + (i - 3) * 7;
+      p.position.set(ax, groundBowlY(ax, az), az);
+      this.neighborhoodGroup.add(p);
+      this.walkers.push({ group: p, ax, az, range: 6.5, axis: 'z', phase: i * 1.1 });
+    }
+
+    // Subtle glowing floating beacon above the region's Inn / Greenhouse doorstep for entering indoor exploration
+    const doorPos: [number, number] =
+      region.id === 'sydney'
+        ? [-5.8, -5.8]
+        : region.id === 'darrowby'
+          ? [-1.8, -4.8]
+          : region.id === 'wangshi'
+            ? [-6.4, -5.6]
+            : [-5.8, 0.8];
+    const mk = new THREE.Group();
+    mk.position.set(doorPos[0], 3.3, doorPos[1]);
+    const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), lampBulb);
+    mk.add(diamond);
+    this.doorwayMarker = mk;
+    this.neighborhoodGroup.add(mk);
+  }
+
+  applyAtmosphere(timeMode: TimeMode, renderStyle: 'pocket' | 'pixel' | 'hd'): void {
+    const isNight = timeMode === 'night' || timeMode === 'eclipse';
+    this.skyMat.map = isNight ? this.skyNightTex : this.skyDayTex;
+    this.skyMat.color.set(
+      timeMode === 'sunset'
+        ? '#f5cbb0'
+        : timeMode === 'morning'
+          ? '#f6ebe0'
+          : renderStyle === 'hd' && !isNight
+            ? '#d9ecf8'
+            : '#ffffff',
+    );
+    this.skyMat.needsUpdate = true;
+
+    this.endcapMat.map = isNight ? this.endcapNightTex : this.endcapDayTex;
+    this.endcapMat.needsUpdate = true;
+
+    this.overheadMats.forEach((m, i) => {
+      m.map = isNight ? this.cityNightTexs[i] : this.cityDayTexs[i];
+      m.needsUpdate = true;
+    });
+  }
+
+  update(dt: number, simTime: number): void {
+    if (this.hubWheel) {
+      this.hubWheel.rotation.z += dt * 0.08;
+    }
+    for (const a of this.airships) {
+      a.group.position.x = a.baseX + Math.sin(simTime * a.speed + a.phase) * 32;
+      a.group.position.z = a.baseZ + Math.cos(simTime * a.speed * 0.6 + a.phase) * 26;
+      a.group.rotation.y = Math.cos(simTime * a.speed + a.phase) > 0 ? Math.PI * 0.35 : -Math.PI * 0.65;
+    }
+    for (const w of this.walkers) {
+      const z = w.az + Math.sin(simTime * 0.48 + w.phase) * w.range;
+      w.group.position.set(w.ax, groundBowlY(w.ax, z), z);
+    }
+    if (this.doorwayMarker) {
+      this.doorwayMarker.rotation.y += dt * 1.6;
+      this.doorwayMarker.position.y = 3.3 + Math.sin(simTime * 3.0) * 0.16;
     }
   }
 
   dispose(): void {
+    this.floorTex?.dispose();
     this.skyDayTex.dispose();
     this.skyNightTex.dispose();
-    for (const tex of this.stripTextures) tex.dispose();
+    this.endcapDayTex.dispose();
+    this.endcapNightTex.dispose();
+    for (const t of [...this.cityDayTexs, ...this.cityNightTexs]) t.dispose();
   }
 }

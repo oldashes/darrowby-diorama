@@ -30,6 +30,7 @@ uniform vec3 uSkyBot;
 uniform float uNightWarmth;
 uniform float uPerspectiveMode;
 uniform vec2 uCamNearFar;
+uniform float uSpaceMode;
 
 float linearizeDepth(float d) {
   if (uPerspectiveMode < 0.5) return d;
@@ -131,26 +132,31 @@ void main() {
     ? smoothstep(0.0038, 0.015, depthDiff) * (1.0 - isBg)
     : smoothstep(0.0055, 0.016, depthDiff) * (1.0 - isBg);
 
-  if (isPocket && isBg > 0.5) {
+  if (isPocket && isBg > 0.5 && uSpaceMode < 0.5) {
     vec3 paperSrgb = pocketPaperSrgb(vUv);
     float paperVig = smoothstep(0.65, 1.32, length(vUv - 0.5) * 1.42) * 0.05;
     gl_FragColor = vec4(paperSrgb * (1.0 - paperVig), 1.0);
     return;
   }
 
-  if (isHd && isBg > 0.5) {
+  if (isHd && isBg > 0.5 && uSpaceMode < 0.5) {
     vec3 skySrgb = pow(aces(hdSkyLinear(vUv) * 1.06), vec3(1.0 / 2.2));
     float vigBg = 1.0 - smoothstep(0.62, 1.30, length(vUv - 0.5) * 1.42) * 0.14;
     gl_FragColor = vec4(skySrgb * vigBg, 1.0);
     return;
   }
 
-  // Interior normal crease detection
+  // Interior normal crease detection + smooth perspective distance ink attenuation
   float nDelta = max(length(nR - nL), length(nU - nD));
   float nearGeom = 1.0 - step(bgCutoff, dC);
   float normalWeight = isPocket ? 0.62 : isHd ? 0.78 : 0.68;
   float normalEdge = smoothstep(0.54, 1.02, nDelta) * nearGeom;
   float edge = clamp(max(depthEdge, normalEdge * normalWeight), 0.0, 1.0) * uInkStrength;
+  if (uPerspectiveMode > 0.5) {
+    float linD = linearizeDepth(dC);
+    float distFade = mix(1.0, 0.10, smoothstep(0.045, 0.24, linD));
+    edge *= distFade;
+  }
 
   // Sunlit top-edge rim highlight (strong warm bounce in HD storybook, subtle in pocket/pixel)
   float topCrease = clamp(nC.y - nD.y, 0.0, 1.0) * nearGeom;
@@ -172,15 +178,16 @@ void main() {
   col += avgBloom * bloomAmt;
 
   if (isPocket) {
-    if (dC >= bgCutoff) {
+    if (dC >= bgCutoff && uSpaceMode < 0.5) {
       vec3 extPaper = pocketPaperSrgb(vUv);
       col = pow(extPaper, vec3(2.2));
     }
 
     vec3 srgb = pow(aces(col * 1.02), vec3(1.0 / 2.2));
     vec2 cssPos = vUv * uViewportCss;
+    bool skipCosmosWash = uSpaceMode > 0.5 && linearizeDepth(dC) > 0.14;
 
-    if (dC < bgCutoff) {
+    if (dC < bgCutoff && !skipCosmosWash) {
       // 1. Flat architectural watercolor wash (5-stop soft luminance quantization + matte desaturation)
       float luma = dot(srgb, vec3(0.299, 0.587, 0.114));
       float qLuma = floor(luma * 5.0 + 0.5) / 5.0;
@@ -216,7 +223,7 @@ void main() {
   }
 
   if (isHd) {
-    if (dC >= bgCutoff) {
+    if (dC >= bgCutoff && uSpaceMode < 0.5) {
       col = hdSkyLinear(vUv);
     }
     vec3 brushInk = pow(vec3(0.176, 0.114, 0.078), vec3(2.2)); // warm walnut-sepia storybook brush #2d1d14
@@ -303,6 +310,7 @@ export class InkPipeline {
         uNightWarmth: { value: 0 },
         uPerspectiveMode: { value: 0.0 },
         uCamNearFar: { value: new THREE.Vector2(0.5, 120.0) },
+        uSpaceMode: { value: 0.0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -364,11 +372,13 @@ export class InkPipeline {
     skyTopHex: string,
     skyBotHex: string,
     toggleFxForNormals: (hidden: boolean) => void,
+    isSpaceBg = false,
   ): void {
     this.compositeMat.uniforms.uNightWarmth.value = nightWarmth;
     this.compositeMat.uniforms.uDarkTheme.value = isDarkSky ? 1.0 : 0.0;
     this.compositeMat.uniforms.uSkyTop.value.set(skyTopHex);
     this.compositeMat.uniforms.uSkyBot.value.set(skyBotHex);
+    this.compositeMat.uniforms.uSpaceMode.value = isSpaceBg ? 1.0 : 0.0;
 
     const isPersp = camera instanceof THREE.PerspectiveCamera;
     this.compositeMat.uniforms.uPerspectiveMode.value = isPersp ? 1.0 : 0.0;
