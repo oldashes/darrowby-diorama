@@ -12,8 +12,8 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-BUNb3a6M.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DnnAmVQY.css">
+    <script type="module" crossorigin src="./assets/index-CgBo8Y2e.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BZ4Pwm3O.css">
   </head>
   <body>
     <div id="app">
@@ -33,9 +33,10 @@
               <span class="loc-dot"></span>
               <strong id="loc-name">悉尼 · 蓝花楹海湾（平地探索）</strong>
               <span id="weather-pill" class="meta-pill">初夏 · 昼</span>
+              <span id="physics-pill" class="meta-pill physics-pill">1.00 G · 大陆带 A (0°)</span>
             </div>
-            <div id="loc-sub" class="loc-sub">库珀空间站 · 脚下是正常地球街区，抬头即见 R=320m 弯曲倒悬大陆穹顶</div>
-            <div id="field-note" class="field-note">WASD / 左下摇杆自由走跑 · 拖拽 360° 环视与抬头看穹顶 · 空格/右上按钮跳跃，空中再按展开滑翔伞 · 走近门口按 E 进屋。</div>
+            <div id="loc-sub" class="loc-sub">库珀空间站 · 360° 共转离心重力平地：可跨玻璃天窗栈桥环游、登端盖入 0G 枢纽</div>
+            <div id="field-note" class="field-note">WASD/摇杆自由走跑 · 顺转跑步增重/逆转减重 · Space 跳伞 · T 抛棒球看科里奥利弧线 · 近门按 E 进屋。</div>
             <div id="legend-row" class="legend-row"></div>
             <button id="btn-open-regions" class="loc-action-btn">🌍 切换地域 / 全球地名坐标</button>
           </div>
@@ -133,9 +134,11 @@
           <!-- Ground Perspective Bar -->
           <div id="ground-bar" class="cylinder-bar">
             <div class="pill-group" role="group" aria-label="平地视线">
-              <button class="ground-cam-btn active" data-ground="street">👀 街景平视</button>
-              <button class="ground-cam-btn" data-ground="sky">🔭 仰望穹顶</button>
-              <button class="ground-cam-btn" data-ground="walk">🚶 环街漫步</button>
+              <button class="ground-cam-btn active" data-ground="street">👀 街景</button>
+              <button class="ground-cam-btn" data-ground="bridge">🌉 栈桥</button>
+              <button class="ground-cam-btn" data-ground="endcap">🏔️ 端盖</button>
+              <button class="ground-cam-btn" data-ground="sky">🔭 穹顶</button>
+              <button class="ground-cam-btn" data-ground="walk">🚶 漫步</button>
             </div>
           </div>
 
@@ -161,6 +164,7 @@
               <div id="joy-knob" class="joy-knob"></div>
             </div>
             <div id="action-pad" class="action-pad">
+              <button id="btn-throw-ball" class="pad-mini-btn" title="垂直抛棒球测科里奥利偏转 (T)">⚾</button>
               <button id="btn-sprint-toggle" class="pad-mini-btn" title="切换奔跑冲刺 (Shift)">🏃</button>
               <button id="btn-jump-glide" class="pad-jump-btn" title="跳跃 / 空中展开滑翔伞 (Space)">⬆️ 跳</button>
             </div>
